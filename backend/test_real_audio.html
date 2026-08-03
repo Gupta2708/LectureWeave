@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Real Audio Processing Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .log { background: #f0f0f0; padding: 10px; margin: 10px 0; height: 200px; overflow-y: scroll; }
+        button { padding: 10px 20px; margin: 5px; }
+        .connected { color: green; }
+        .disconnected { color: red; }
+        .recording { color: red; font-weight: bold; }
+        .notes { background: #f9f9f9; padding: 10px; margin: 10px 0; border-left: 4px solid #007bff; }
+    </style>
+</head>
+<body>
+    <h1>🎤 Real Audio Processing Test</h1>
+    
+    <div>
+        WebSocket Status: <span id="wsStatus" class="disconnected">Disconnected</span><br>
+        Recording Status: <span id="recStatus">Not Recording</span><br>
+        Microphone: <span id="micStatus">Not Accessed</span>
+    </div>
+    
+    <div>
+        <button onclick="connect()">Connect WebSocket</button>
+        <button onclick="startRealRecording()">🎤 Start Real Recording</button>
+        <button onclick="stopRealRecording()">⏹️ Stop Recording</button>
+        <button onclick="clearAll()">Clear All</button>
+    </div>
+    
+    <div id="log" class="log"></div>
+    
+    <div>
+        <h3>🤖 Live AI Notes from Real Audio:</h3>
+        <div id="notes"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let mediaRecorder = null;
+        let audioStream = null;
+        const lectureId = 'real-test-lecture';
+        
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateStatus(elementId, status, className) {
+            const element = document.getElementById(elementId);
+            element.textContent = status;
+            element.className = className;
+        }
+        
+        function connect() {
+            if (ws) ws.close();
+            
+            log('🔌 Connecting to Real Audio Backend...');
+            ws = new WebSocket(`ws://localhost:8001/ws/lecture/${lectureId}`);
+            
+            ws.onopen = function() {
+                log('✅ WebSocket connected to REAL backend');
+                updateStatus('wsStatus', 'Connected', 'connected');
+                
+                ws.send(JSON.stringify({
+                    type: 'connection_established',
+                    lecture_id: lectureId
+                }));
+            };
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                log(`📨 ${data.type}: ${data.message || JSON.stringify(data)}`);
+                
+                if (data.type === 'live_update') {
+                    addRealNote(data);
+                }
+            };
+            
+            ws.onclose = function() {
+                log('❌ WebSocket disconnected');
+                updateStatus('wsStatus', 'Disconnected', 'disconnected');
+            };
+            
+            ws.onerror = function(error) {
+                log(`🚨 WebSocket error: ${error}`);
+            };
+        }
+        
+        async function startRealRecording() {
+            try {
+                log('🎤 Requesting microphone access...');
+                
+                // Get real microphone audio
+                audioStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                });
+                
+                updateStatus('micStatus', 'Microphone Active', 'connected');
+                log('✅ Microphone access granted');
+                
+                // Create MediaRecorder
+                mediaRecorder = new MediaRecorder(audioStream, {
+                    mimeType: 'audio/webm;codecs=opus'
+                });
+                
+                // Handle audio chunks
+                mediaRecorder.ondataavailable = async (event) => {
+                    if (event.data.size > 0) {
+                        log(`🎵 Audio chunk: ${event.data.size} bytes - sending to backend...`);
+                        
+                        // Send to backend for processing
+                        const formData = new FormData();
+                        formData.append('audio_file', event.data, 'real_audio.webm');
+                        
+                        try {
+                            const response = await fetch(`http://localhost:8001/api/audio/lecture/${lectureId}/chunk`, {
+                                method: 'POST',
+                                body: formData
+                            });
+                            
+                            const result = await response.json();
+                            log(`✅ Backend processed audio: ${result.message}`);
+                            
+                        } catch (error) {
+                            log(`❌ Error sending audio: ${error.message}`);
+                        }
+                    }
+                };
+                
+                // Start recording in 5-second chunks
+                mediaRecorder.start(5000);
+                updateStatus('recStatus', 'Recording Real Audio', 'recording');
+                
+                // Tell backend we're recording
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'start_recording',
+                        lecture_id: lectureId
+                    }));
+                }
+                
+                log('🎤 REAL RECORDING STARTED - Speak into your microphone!');
+                
+            } catch (error) {
+                log(`❌ Microphone error: ${error.message}`);
+                updateStatus('micStatus', 'Microphone Error', 'disconnected');
+            }
+        }
+        
+        function stopRealRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+                audioStream = null;
+            }
+            
+            updateStatus('recStatus', 'Not Recording', '');
+            updateStatus('micStatus', 'Not Accessed', '');
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'stop_recording',
+                    lecture_id: lectureId
+                }));
+            }
+            
+            log('⏹️ Recording stopped');
+        }
+        
+        function addRealNote(data) {
+            const notesDiv = document.getElementById('notes');
+            const noteDiv = document.createElement('div');
+            noteDiv.className = 'notes';
+            noteDiv.innerHTML = `
+                <strong>⏰ ${data.timestamp}</strong> 
+                <span style="color: #666;">(Importance: ${Math.round(data.importance_score * 100)}%)</span>
+                <div style="margin: 8px 0; color: #333;">${data.notes.replace(/\n/g, '<br>')}</div>
+                <div style="font-size: 0.9em; color: #666; font-style: italic;">
+                    🎤 "${data.transcription.text}"
+                </div>
+                ${data.processing_time ? `<div style="font-size: 0.8em; color: #999;">Processing time: ${data.processing_time}s</div>` : ''}
+            `;
+            notesDiv.appendChild(noteDiv);
+            notesDiv.scrollTop = notesDiv.scrollHeight;
+        }
+        
+        function clearAll() {
+            document.getElementById('log').innerHTML = '';
+            document.getElementById('notes').innerHTML = '';
+        }
+        
+        // Auto-connect on page load
+        window.onload = function() {
+            log('🚀 Real Audio Processing Test Ready');
+            log('1. Click "Connect WebSocket"');
+            log('2. Click "Start Real Recording"');
+            log('3. Speak into your microphone');
+            log('4. Watch real AI notes appear!');
+        };
+    </script>
+</body>
+</html>

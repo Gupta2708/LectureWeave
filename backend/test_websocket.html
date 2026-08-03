@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .log { background: #f0f0f0; padding: 10px; margin: 10px 0; height: 300px; overflow-y: scroll; }
+        button { padding: 10px 20px; margin: 5px; }
+        .connected { color: green; }
+        .disconnected { color: red; }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Test for LectureWeave</h1>
+    
+    <div>
+        Status: <span id="status" class="disconnected">Disconnected</span>
+    </div>
+    
+    <div>
+        <button onclick="connect()">Connect</button>
+        <button onclick="startRecording()">Start Recording</button>
+        <button onclick="stopRecording()">Stop Recording</button>
+        <button onclick="disconnect()">Disconnect</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+    
+    <div id="log" class="log"></div>
+    
+    <div>
+        <h3>Live Notes:</h3>
+        <div id="notes"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        const lectureId = 'test-lecture-123';
+        
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateStatus(status, className) {
+            const statusSpan = document.getElementById('status');
+            statusSpan.textContent = status;
+            statusSpan.className = className;
+        }
+        
+        function connect() {
+            if (ws) {
+                ws.close();
+            }
+            
+            log('Connecting to WebSocket...');
+            ws = new WebSocket(`ws://localhost:8001/ws/lecture/${lectureId}`);
+            
+            ws.onopen = function() {
+                log('✅ WebSocket connected');
+                updateStatus('Connected', 'connected');
+                
+                // Send connection established message
+                ws.send(JSON.stringify({
+                    type: 'connection_established',
+                    lecture_id: lectureId
+                }));
+            };
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                log(`📨 Received: ${JSON.stringify(data)}`);
+                
+                if (data.type === 'live_update') {
+                    addNote(data);
+                }
+            };
+            
+            ws.onclose = function() {
+                log('❌ WebSocket disconnected');
+                updateStatus('Disconnected', 'disconnected');
+            };
+            
+            ws.onerror = function(error) {
+                log(`🚨 WebSocket error: ${error}`);
+                updateStatus('Error', 'disconnected');
+            };
+        }
+        
+        function startRecording() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                log('🎤 Starting recording...');
+                ws.send(JSON.stringify({
+                    type: 'start_recording',
+                    lecture_id: lectureId
+                }));
+            } else {
+                log('❌ WebSocket not connected');
+            }
+        }
+        
+        function stopRecording() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                log('⏹️ Stopping recording...');
+                ws.send(JSON.stringify({
+                    type: 'stop_recording',
+                    lecture_id: lectureId
+                }));
+            } else {
+                log('❌ WebSocket not connected');
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+            document.getElementById('notes').innerHTML = '';
+        }
+        
+        function addNote(data) {
+            const notesDiv = document.getElementById('notes');
+            const noteDiv = document.createElement('div');
+            noteDiv.style.cssText = 'border: 1px solid #ccc; margin: 5px 0; padding: 10px; background: #f9f9f9;';
+            noteDiv.innerHTML = `
+                <strong>${data.timestamp}</strong> (Importance: ${Math.round(data.importance_score * 100)}%)<br>
+                <div style="color: #333; margin: 5px 0;">${data.notes}</div>
+                <small style="color: #666; font-style: italic;">"${data.transcription.text}"</small>
+            `;
+            notesDiv.appendChild(noteDiv);
+            notesDiv.scrollTop = notesDiv.scrollHeight;
+        }
+        
+        // Auto-connect on page load
+        window.onload = function() {
+            log('Page loaded. Click Connect to start.');
+        };
+    </script>
+</body>
+</html>

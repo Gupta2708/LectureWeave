@@ -1,0 +1,8 @@
+# MongoDB and Vector Search
+pymongo>=4.6.0  # MongoDB driver
+motor>=3.3.0  # Async MongoDB driver for FastAPI
+sentence-transformers>=2.2.0  # For embeddings (already have)
+numpy>=1.21.0  # For vector operations (already have)
+
+# Optional: MongoDB Atlas integration
+dnspython>=2.4.0  # Required for mongodb+srv:// connection strings
