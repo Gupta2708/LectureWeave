@@ -1,19 +1,22 @@
 """
-Authentication service with JWT tokens and password hashing
+Authentication service with JWT tokens and password hashing.
+
+All JWT configuration is read from the canonical settings module — this file
+must not touch os.getenv/os.environ directly.
 """
-import os
 import jwt
 import bcrypt
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from bson import ObjectId
 
+from app.core.config import settings
 from database.mongodb_connection import get_db
 
-# JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 30  # Remember user for 30 days
+# JWT configuration (read from centralised settings; do not read env here)
+SECRET_KEY = settings.JWT_SECRET_KEY
+ALGORITHM = settings.JWT_ALGORITHM
+ACCESS_TOKEN_EXPIRE_DAYS = settings.ACCESS_TOKEN_EXPIRE_DAYS
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""

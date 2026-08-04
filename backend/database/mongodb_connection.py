@@ -8,9 +8,11 @@ from bson import ObjectId
 from typing import Optional, List, Dict, Any
 import numpy as np
 from datetime import datetime
-import os
+import logging
 import time
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _lecture_id_filter(lecture_id: str):
@@ -42,28 +44,26 @@ _sync_client: Optional[MongoClient] = None
 _db = None
 
 def get_mongodb_url() -> str:
-    """Get MongoDB connection URL from environment"""
-    # print(settings.MONGODB_URL)
-    return os.getenv("MONGODB_URL", settings.MONGODB_URL)
+    """Get MongoDB connection URL from centralised settings."""
+    return settings.MONGODB_URL
 
 def init_mongodb():
-    """Initialize MongoDB connection"""
+    """Initialize MongoDB connection. Never logs the connection URL — it may
+    embed credentials — only that initialisation happened."""
     global _client, _sync_client, _db
-    
+
     mongodb_url = get_mongodb_url()
-    if mongodb_url:
-        print("hai")
-    else: print("nhi")
-    print(f"🔗 Connecting to: {mongodb_url[:50]}...")  # Debug: show connection URL
-    
+    if not mongodb_url:
+        raise RuntimeError("MONGODB_URL is not configured")
+
     # Async client for FastAPI
     _client = AsyncIOMotorClient(mongodb_url)
-    _db = _client.lectureweave
-    
+    _db = _client[settings.MONGODB_DATABASE]
+
     # Sync client for non-async operations
     _sync_client = MongoClient(mongodb_url)
-    
-    print("✅ MongoDB Atlas connected successfully!")
+
+    logger.info("MongoDB connection initialized (database=%s)", settings.MONGODB_DATABASE)
     return _db
 
 def get_db():
@@ -80,7 +80,7 @@ def close_mongodb():
         _client.close()
     if _sync_client:
         _sync_client.close()
-    print("🔒 MongoDB connections closed")
+    logger.info("MongoDB connections closed")
 
 # Collection helpers
 def get_collection(name: str):

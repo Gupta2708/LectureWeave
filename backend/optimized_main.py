@@ -7,7 +7,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, D
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import asyncio
-import os
 import time
 import tempfile
 from pathlib import Path
@@ -15,19 +14,28 @@ from typing import Dict, List
 import logging
 from collections import defaultdict
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Load .env before importing settings so config values pick up local overrides.
+from dotenv import load_dotenv
+load_dotenv()
+
+from app.core.config import settings
+
+# Configure logging from centralised settings
+logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Groq key comes from settings; never printed.
+GROQ_API_KEY = settings.GROQ_API_KEY
 
-app = FastAPI(title="LectureWeave Backend - Optimized Agentic Processing")
+app = FastAPI(title=f"{settings.PROJECT_NAME} - Optimized Agentic Processing")
 
-# CORS middleware
+# CORS middleware — environment-controlled. Wildcard is downgraded to
+# credentials=False by settings.cors_allow_credentials_effective (CORS spec
+# forbids credentials + wildcard).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origins_list or ["http://localhost:3000"],
+    allow_credentials=settings.cors_allow_credentials_effective,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,12 +55,10 @@ from database.mongodb_connection import (
     create_lecture,
     user_owns_lecture
 )
-from dotenv import load_dotenv
-load_dotenv()  # Load environment variables
 
 # Initialize MongoDB on startup
 init_mongodb()
-print("✅ MongoDB initialized for document storage and vector search")
+logger.info("MongoDB initialized for document storage and vector search")
 
 # Import and include authentication routes
 from app.api.auth import router as auth_router, get_current_user
@@ -618,5 +624,4 @@ async def websocket_endpoint(websocket: WebSocket, lecture_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8001))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=settings.HOST, port=settings.PORT)

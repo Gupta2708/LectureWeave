@@ -1,65 +1,136 @@
+"""
+Canonical application settings.
+
+All runtime configuration is read here through pydantic-settings.
+No other module should call `os.getenv()`/`os.environ` for application config.
+"""
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import List, Optional
 import os
 
+
 class Settings(BaseSettings):
-    # API Settings
+    # ---- Application ----
+    APP_NAME: str = "LectureWeave"
+    APP_ENV: str = "development"  # development | testing | production
+    APP_DEBUG: bool = True
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "LectureWeave Backend"
-    
-    # Database - MongoDB (the active persistence layer)
-    MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
-    # For MongoDB Atlas:
-    # mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority
+    LOG_LEVEL: str = "INFO"
 
-    # Legacy PostgreSQL setting, retained only for backward-compatible imports in
-    # the not-yet-removed SQLAlchemy code. Not used by the active MongoDB app.
-    # No credentials are hard-coded here; provide via env if legacy code is run.
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
-    
-    # Storage
+    # ---- Server ----
+    HOST: str = "0.0.0.0"
+    PORT: int = 8000
+
+    # ---- CORS ----
+    # Comma-separated origins, e.g. "http://localhost:3000,https://app.example.com"
+    # A single "*" enables wildcard (development only; incompatible with credentials).
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000"
+    CORS_ALLOW_CREDENTIALS: bool = True
+
+    # ---- Database (MongoDB) ----
+    MONGODB_URL: str = "mongodb://localhost:27017"
+    MONGODB_DATABASE: str = "lectureweave"
+
+    # ---- Storage ----
+    STORAGE_DIRECTORY: str = "storage/uploads"
     UPLOAD_DIR: str = "storage/uploads"
     AUDIO_DIR: str = "storage/audio"
     PROCESSED_DIR: str = "storage/processed"
-    
-    # AI/ML Settings
-    WHISPER_MODEL_SIZE: str = "small"  # tiny, base, small, medium, large (small is much better!)
+
+    # ---- Speech-to-text (Faster Whisper) ----
+    WHISPER_MODEL_SIZE: str = "small"
     WHISPER_DEVICE: str = "cpu"
     WHISPER_COMPUTE_TYPE: str = "int8"
-    
+
+    # ---- Embeddings ----
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
-    
-    # LLM Settings
-    GROQ_API_KEY: Optional[str] = os.getenv("GROQ_API_KEY")
-    OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
-    LLM_MODEL: str = "llama-3.1-8b-instant"
-    
-    # Audio Processing
+    VECTOR_INDEX_NAME: str = "vector_search"
+
+    # ---- LLM (Groq) ----
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
+    LLM_MODEL: str = "llama-3.1-8b-instant"  # legacy alias, kept for compat
+
+    # ---- Audio processing ----
     AUDIO_SAMPLE_RATE: int = 16000
-    CHUNK_DURATION: int = 20  # seconds (optimized for better transcription)
-    SYNTHESIS_INTERVAL: int = 60  # seconds (3 chunks for structured notes)
-    
-    # RAG Settings
+    CHUNK_DURATION: int = 20  # seconds
+    SYNTHESIS_INTERVAL: int = 60  # seconds
+
+    # ---- RAG ----
     FAISS_TOP_K: int = 3
     IMPORTANCE_THRESHOLD: float = 0.0
     HISTORY_CHUNKS: int = 4
-    
-    # Security
-    # Sourced from JWT_SECRET_KEY (the variable the auth service also reads);
-    # falls back to SECRET_KEY, then a clearly-insecure dev default so the app
-    # still boots locally. Always set JWT_SECRET_KEY in real environments.
-    SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", os.getenv("SECRET_KEY", "dev-insecure-change-me"))
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    
+
+    # ---- Security / JWT ----
+    JWT_SECRET_KEY: str = "dev-insecure-change-me"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_DAYS: int = 30
+
+    # ---- Legacy (unused by active app; retained only for imports in files
+    # scheduled for removal). No credentials are baked in. ----
+    DATABASE_URL: str = ""
+    OPENAI_API_KEY: Optional[str] = None
+
     class Config:
         env_file = ".env"
         case_sensitive = True
 
-# Load environment variables
-settings = Settings()
+    # ---- Convenience accessors ----
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.lower() == "production"
 
-# Ensure directories exist
+    @property
+    def cors_origins_list(self) -> List[str]:
+        raw = (self.CORS_ALLOWED_ORIGINS or "").strip()
+        if not raw:
+            return []
+        return [o.strip() for o in raw.split(",") if o.strip()]
+
+    @property
+    def cors_allow_credentials_effective(self) -> bool:
+        """CORS spec forbids credentials + wildcard; downgrade credentials off
+        when the origin list is a wildcard so misconfiguration fails safely."""
+        if self.cors_origins_list == ["*"]:
+            return False
+        return self.CORS_ALLOW_CREDENTIALS
+
+    # Back-compat: the auth service historically read `SECRET_KEY`.
+    @property
+    def SECRET_KEY(self) -> str:
+        return self.JWT_SECRET_KEY
+
+    @property
+    def ALGORITHM(self) -> str:
+        return self.JWT_ALGORITHM
+
+
+def _validate(s: "Settings") -> None:
+    """Fail loudly in production when required secrets are still placeholders."""
+    if not s.is_production:
+        return
+    problems: List[str] = []
+    if s.JWT_SECRET_KEY in ("", "dev-insecure-change-me", "your-secret-key-change-in-production"):
+        problems.append("JWT_SECRET_KEY is missing or a placeholder")
+    if not s.MONGODB_URL or s.MONGODB_URL == "mongodb://localhost:27017":
+        problems.append("MONGODB_URL is missing or points at localhost")
+    if not s.GROQ_API_KEY:
+        problems.append("GROQ_API_KEY is missing")
+    if s.cors_origins_list == ["*"]:
+        problems.append("CORS_ALLOWED_ORIGINS is a wildcard; specify explicit origins")
+    if problems:
+        raise RuntimeError(
+            "Invalid production configuration:\n  - " + "\n  - ".join(problems)
+        )
+
+
+settings = Settings()
+_validate(settings)
+
+# Ensure runtime directories exist. Directory creation is safe and stays here
+# because it is a side-effect of configuration, not application logic.
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.AUDIO_DIR, exist_ok=True)
 os.makedirs(settings.PROCESSED_DIR, exist_ok=True)
