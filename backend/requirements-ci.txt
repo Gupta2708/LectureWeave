@@ -1,0 +1,38 @@
+# Lightweight dependency set for CI.
+#
+# The app's heavy dependencies (torch/sentence-transformers, faster-whisper,
+# weasyprint, faiss) are imported lazily/behind try-except, so app.main and the
+# whole unit-test suite import and run on this light set alone. This keeps CI
+# fast and avoids building multi-gigabyte ML wheels just to run tests. The full
+# stack is installed from requirements.txt / requirements-railway.txt for the
+# actual runtime image.
+
+# Web + server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+websockets==12.0
+
+# Core libs used at import time
+numpy==1.24.3
+groq==0.4.2
+markdown==3.7
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Auth
+PyJWT==2.8.0
+bcrypt==4.1.2
+email-validator==2.1.0
+
+# MongoDB drivers (import-time; tests mock the actual connection)
+pymongo==4.6.1
+motor==3.3.2
+dnspython==2.4.2
+aiofiles==23.2.1
+
+# Test tooling
+pytest==8.3.4
+pytest-asyncio==0.25.0
+httpx==0.27.2

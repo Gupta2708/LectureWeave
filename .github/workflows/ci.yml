@@ -35,14 +35,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements-railway.txt
+          cache-dependency-path: backend/requirements-ci.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install the deployment-tested subset; heavy ML wheels are optional
-          # for the current test scope (health + config).
-          pip install -r requirements-railway.txt
-          pip install pytest pytest-asyncio httpx
+          # Light dependency set: the heavy ML/PDF wheels (torch, faster-whisper,
+          # weasyprint, faiss) are lazy/guarded imports and are not needed to
+          # import the app or run the unit tests. Keeps CI fast and reliable.
+          pip install -r requirements-ci.txt
       - name: Compile check
         run: python -m compileall -q app database
       - name: Tests
