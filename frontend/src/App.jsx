@@ -12,6 +12,9 @@ import NotesViewer from './pages/NotesViewer'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import MyNotes from './pages/MyNotes'
+import SubjectChatPage from './pages/SubjectChatPage'
+import FlashcardsPage from './pages/FlashcardsPage'
+import QuizPage from './pages/QuizPage'
 
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth()
@@ -57,6 +60,9 @@ function App() {
             <Route path="/subjects/new" element={<ProtectedRoute><SubjectsManagement /></ProtectedRoute>} />
             <Route path="/subjects/:subjectId/setup" element={<ProtectedRoute><LectureSetup /></ProtectedRoute>} />
             <Route path="/subjects/:subjectId/lecture" element={<ProtectedRoute><LiveLecture_New /></ProtectedRoute>} />
+            <Route path="/subjects/:subjectId/chat" element={<ProtectedRoute><SubjectChatPage /></ProtectedRoute>} />
+            <Route path="/subjects/:subjectId/flashcards" element={<ProtectedRoute><FlashcardsPage /></ProtectedRoute>} />
+            <Route path="/subjects/:subjectId/quizzes" element={<ProtectedRoute><QuizPage /></ProtectedRoute>} />
             <Route path="/my-notes" element={<ProtectedRoute><MyNotes /></ProtectedRoute>} />
             <Route path="/lecture/:lectureId" element={<ProtectedRoute><NotesViewer /></ProtectedRoute>} />
           </Routes>

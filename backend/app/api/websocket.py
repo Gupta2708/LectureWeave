@@ -45,7 +45,7 @@ async def websocket_endpoint(websocket: WebSocket, lecture_id: str) -> None:
             pass
         processor.audio_queues[lecture_id] = asyncio.Queue()
 
-    task = asyncio.create_task(processor.process_lecture_audio(lecture_id))
+    task = asyncio.create_task(processor.process_lecture_audio(lecture_id, user["user_id"]))
     processor.processing_tasks[lecture_id] = task
 
     try:
@@ -68,6 +68,11 @@ async def websocket_endpoint(websocket: WebSocket, lecture_id: str) -> None:
                         "message": "Recording started - Send 20-second audio chunks via HTTP",
                     }
                 )
+
+            elif msg_type == "set_template":
+                template = message.get("template", "detailed")
+                if template in {"concise", "detailed", "bullet", "revision", "summary"}:
+                    processor.lecture_templates[lecture_id] = template
 
             elif msg_type == "stop_recording":
                 logger.info("Stopping recording for lecture %s", lecture_id)

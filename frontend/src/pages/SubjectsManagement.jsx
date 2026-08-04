@@ -271,6 +271,11 @@ const SubjectsManagement = () => {
                       <ArrowRight className="w-4 h-4" />
                     </button>
                   </div>
+                  <div className="flex gap-2 mt-3 text-xs">
+                    <button onClick={() => navigate(`/subjects/${subject._id}/chat`)} className="text-indigo-700">Chat</button>
+                    <button onClick={() => navigate(`/subjects/${subject._id}/flashcards`)} className="text-indigo-700">Flashcards</button>
+                    <button onClick={() => navigate(`/subjects/${subject._id}/quizzes`)} className="text-indigo-700">Quiz</button>
+                  </div>
                 </div>
               </div>
             ))}

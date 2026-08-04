@@ -1,96 +1,44 @@
 """
-Document processing service with MongoDB vector storage
-Replaces FAISS with MongoDB Atlas Vector Search
+Document processing service with MongoDB vector storage.
+
+`sentence_transformers` (and its Torch backend) is imported lazily inside
+`get_embedder()` so that anything that only needs `process_document` at import
+time — retries, notes, tests — can load without pulling in Torch. The actual
+model is still created once and reused thereafter.
 """
-import os
-import asyncio
+import logging
 from pathlib import Path
-from typing import List, Dict, Any
-from sentence_transformers import SentenceTransformer
-from PyPDF2 import PdfReader
-from pptx import Presentation
-import docx
+from typing import Any, Dict, List
+
 import numpy as np
 
 from app.core.config import settings
+from app.services.documents import chunk_document, chunk_text_legacy, extract_document
 from database.mongodb_connection import (
     save_document,
     save_document_embeddings,
-    vector_search,
-    simple_vector_search,
-    mark_document_processed
+    mark_document_processed,
 )
 
-# Global embedder (lazy loaded)
+logger = logging.getLogger(__name__)
+
+# Global embedder (lazy loaded on first use)
 _embedder = None
 
+
 def get_embedder():
-    """Get or create the sentence transformer model."""
+    """Get or create the sentence transformer model.
+
+    The heavy import is deferred so that importing this module does not require
+    Torch to be installed — matters for local dev on Windows and for tests that
+    don't touch retrieval.
+    """
     global _embedder
     if _embedder is None:
+        from sentence_transformers import SentenceTransformer  # noqa: WPS433 (lazy)
+
         _embedder = SentenceTransformer(settings.EMBEDDING_MODEL)
     return _embedder
-
-def extract_text_from_pdf(pdf_path: str) -> str:
-    """Extract text from PDF file."""
-    try:
-        reader = PdfReader(pdf_path)
-        text = []
-        for page in reader.pages:
-            content = page.extract_text()
-            if content:
-                text.append(content)
-        return "\n".join(text)
-    except Exception as e:
-        print(f"Error extracting PDF {pdf_path}: {e}")
-        return ""
-
-def extract_text_from_ppt(ppt_path: str) -> str:
-    """Extract text from PPTX file."""
-    try:
-        prs = Presentation(ppt_path)
-        text = []
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                if hasattr(shape, "text"):
-                    if shape.text.strip():
-                        text.append(shape.text.strip())
-        return "\n".join(text)
-    except Exception as e:
-        print(f"Error extracting PPT {ppt_path}: {e}")
-        return ""
-
-def extract_text_from_docx(docx_path: str) -> str:
-    """Extract text from DOCX file."""
-    try:
-        doc = docx.Document(docx_path)
-        text = []
-        for paragraph in doc.paragraphs:
-            if paragraph.text.strip():
-                text.append(paragraph.text.strip())
-        return "\n".join(text)
-    except Exception as e:
-        print(f"Error extracting DOCX {docx_path}: {e}")
-        return ""
-
-def extract_text_from_txt(txt_path: str) -> str:
-    """Extract text from TXT file."""
-    try:
-        with open(txt_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        print(f"Error extracting TXT {txt_path}: {e}")
-        return ""
-
-def chunk_text(text: str, chunk_size: int = 300) -> List[str]:
-    """Split text into word chunks."""
-    words = text.split()
-    chunks = []
-    for i in range(0, len(words), chunk_size):
-        chunk = " ".join(words[i:i + chunk_size])
-        if chunk.strip():
-            chunks.append(chunk.strip())
-    return chunks
 
 async def process_document(
     file_path: str,
@@ -110,26 +58,20 @@ async def process_document(
     """
     print(f"📄 Processing document: {filename}")
     
-    # Extract text based on file type
+    # Extract structural units before creating the document row.
     file_ext = Path(file_path).suffix.lower()
-    
-    if file_ext == '.pdf':
-        text = extract_text_from_pdf(file_path)
-        file_type = 'pdf'
-    elif file_ext in ['.ppt', '.pptx']:
-        text = extract_text_from_ppt(file_path)
-        file_type = 'pptx'
-    elif file_ext in ['.doc', '.docx']:
-        text = extract_text_from_docx(file_path)
-        file_type = 'docx'
-    elif file_ext == '.txt':
-        text = extract_text_from_txt(file_path)
-        file_type = 'txt'
-    else:
+    try:
+        extracted = extract_document(file_path)
+    except ValueError:
         return {
             "success": False,
             "error": f"Unsupported file type: {file_ext}"
         }
+    except Exception as exc:
+        return {"success": False, "error": f"Could not extract document: {exc}"}
+
+    text = extracted.text
+    file_type = extracted.file_type
     
     if not text or len(text.strip()) < 50:
         return {
@@ -145,43 +87,76 @@ async def process_document(
         filename=filename,
         file_type=file_type,
         file_path=file_path,
-        content=text
+        content=text,
+        page_count=extracted.page_count,
+        slide_count=extracted.slide_count,
     )
     
     print(f"✅ Saved document to MongoDB: {document_id}")
-    
-    # Chunk the text
-    chunks = chunk_text(text, chunk_size=300)
-    print(f"✅ Created {len(chunks)} chunks")
-    
-    # Generate embeddings
-    embedder = get_embedder()
-    embeddings = embedder.encode(chunks, show_progress_bar=False)
-    print(f"✅ Generated embeddings: {embeddings.shape}")
-    
-    # Prepare data for MongoDB
-    embedding_data = [
-        {
-            'lecture_id': lecture_id,
-            'document_id': document_id,
-            'chunk_text': chunk,
-            'chunk_index': i,
-            'embedding': embedding,
-            'metadata': {
-                'filename': filename,
-                'file_type': file_type
+
+    # Everything from this point owns the document row; any failure must mark it
+    # `failed` so the retry endpoint can surface it and the UI does not spin.
+    try:
+        await mark_document_processed(document_id, status="chunking")
+        if settings.DOCUMENT_CHUNKER == "legacy":
+            chunks = chunk_text_legacy(text)
+            structured_chunks: List[Any] = [None] * len(chunks)
+        else:
+            structured_chunks = chunk_document(extracted)
+            chunks = [chunk.text for chunk in structured_chunks]
+        print(f"✅ Created {len(chunks)} chunks")
+
+        await mark_document_processed(document_id, status="embedding")
+        embedder = get_embedder()
+        embeddings = embedder.encode(chunks, show_progress_bar=False)
+        print(f"✅ Generated embeddings: {embeddings.shape}")
+
+        # Prepare data for MongoDB. `embedding_model` is attached to every chunk
+        # regardless of chunker mode so retrieval can filter and later re-index
+        # workflows can find them.
+        embedding_data = [
+            {
+                'lecture_id': lecture_id,
+                'document_id': document_id,
+                'chunk_text': chunk,
+                'chunk_index': i,
+                'embedding': embedding,
+                'embedding_model': settings.EMBEDDING_MODEL,
+                'metadata': {
+                    'filename': filename,
+                    'file_type': file_type,
+                },
             }
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
+        ]
+        for item, structured_chunk in zip(embedding_data, structured_chunks):
+            if structured_chunk is not None:
+                item.update(
+                    {
+                        "page_number": structured_chunk.page_number,
+                        "slide_number": structured_chunk.slide_number,
+                        "section_heading": structured_chunk.section_heading,
+                        "paragraph_index": structured_chunk.paragraph_index,
+                    }
+                )
+
+        await save_document_embeddings(embedding_data)
+        print(f"✅ Saved {len(chunks)} embeddings to MongoDB")
+
+        await mark_document_processed(document_id, status="ready")
+    except Exception as exc:
+        logger.error("Document %s processing failed: %s", document_id, exc, exc_info=True)
+        # Best-effort — never let the failure marker itself crash the caller.
+        try:
+            await mark_document_processed(document_id, status="failed", error=str(exc))
+        except Exception:  # pragma: no cover — defensive
+            logger.exception("Could not mark document %s failed", document_id)
+        return {
+            "success": False,
+            "document_id": document_id,
+            "error": "Processing failed",
         }
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
-    ]
-    
-    # Save embeddings to MongoDB
-    await save_document_embeddings(embedding_data)
-    print(f"✅ Saved {len(chunks)} embeddings to MongoDB")
-    
-    # Mark document as processed
-    await mark_document_processed(document_id)
-    
+
     return {
         "success": True,
         "document_id": document_id,
@@ -192,49 +167,23 @@ async def process_document(
 async def query_documents(
     query_text: str,
     lecture_id: str,
+    user_id: str,
     top_k: int = 10,
-    use_atlas_search: bool = True
-) -> List[str]:
-    """
-    Query documents using vector similarity search.
-    
-    Args:
-        query_text: The query text (transcription)
-        lecture_id: ID of the lecture
-        top_k: Number of top results to return
-        use_atlas_search: Try Atlas Vector Search first, fallback to simple search
-    
-    Returns:
-        List of relevant text chunks
-    """
-    # Generate query embedding
-    embedder = get_embedder()
-    query_embedding = embedder.encode(query_text, show_progress_bar=False)
-    
-    # Try Atlas Vector Search first
-    if use_atlas_search:
-        try:
-            results = await vector_search(
-                query_embedding=query_embedding,
-                lecture_id=lecture_id,
-                top_k=top_k
-            )
-            print(f"✅ Atlas Vector Search returned {len(results)} results")
-            return [r['chunk_text'] for r in results]
-        except Exception as e:
-            print(f"⚠️  Atlas Vector Search failed, using fallback: {e}")
-    
-    # Fallback to simple cosine similarity
-    results = await simple_vector_search(
-        query_embedding=query_embedding,
-        lecture_id=lecture_id,
-        top_k=top_k
+):
+    """Return citation-preserving hybrid results for an owned lecture."""
+    # Lazy import so this module stays importable without the retrieval stack.
+    from app.services.retrieval import retrieve
+
+    return await retrieve(
+        query_text,
+        user_id=user_id,
+        lecture_ids=[lecture_id],
+        limit=top_k,
     )
-    
-    print(f"✅ Simple vector search returned {len(results)} results")
-    return [r['chunk_text'] for r in results]
 
 # Backward compatibility: Keep the old function name
-async def query_documents_faiss(query_text: str, lecture_id: str, top_k: int = 10) -> List[str]:
-    """Backward compatibility wrapper for query_documents"""
-    return await query_documents(query_text, lecture_id, top_k)
+async def query_documents_faiss(
+    query_text: str, lecture_id: str, user_id: str, top_k: int = 10
+) -> List[str]:
+    """Deprecated text-only adapter; callers should use ``query_documents``."""
+    return [result.chunk_text for result in await query_documents(query_text, lecture_id, user_id, top_k)]

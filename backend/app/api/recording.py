@@ -31,4 +31,6 @@ async def receive_audio_chunk(
     if not websocket:
         return {"error": "No active WebSocket connection for this lecture"}
 
-    return await processor.process_audio_chunk(lecture_id, audio_file, websocket)
+    return await processor.process_audio_chunk(
+        lecture_id, audio_file, websocket, current_user["user_id"]
+    )

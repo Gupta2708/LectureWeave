@@ -20,14 +20,12 @@ const APP_NAME = import.meta.env.VITE_APP_NAME || 'LectureWeave';
 // to keep `npm run build` and a no-.env first run working.
 if (import.meta.env.DEV) {
   if (!rawApiBaseUrl) {
-    // eslint-disable-next-line no-console
     console.warn(
       '[environment] VITE_API_BASE_URL is not set — defaulting to http://localhost:8000. ' +
         'Copy frontend/.env.example to frontend/.env and set it.'
     );
   }
   if (!rawWsBaseUrl) {
-    // eslint-disable-next-line no-console
     console.warn(
       '[environment] VITE_WS_BASE_URL is not set — defaulting to ws://localhost:8000.'
     );

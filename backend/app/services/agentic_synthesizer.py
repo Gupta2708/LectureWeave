@@ -5,6 +5,7 @@ Combines multiple transcription chunks into structured, coherent notes
 import asyncio
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
+from app.services.synthesis.templates import template_instruction
 
 try:
     from groq import Groq
@@ -22,7 +23,8 @@ async def synthesize_structured_notes(
     transcriptions: List[Dict[str, Any]],
     rag_context: List[str],
     lecture_id: str,
-    previous_structured_notes: Optional[str] = None
+    previous_structured_notes: Optional[str] = None,
+    template: str = "detailed",
 ) -> Dict[str, Any]:
     """
     Synthesize multiple transcription chunks into structured, coherent notes.
@@ -52,7 +54,8 @@ async def synthesize_structured_notes(
         _synthesize_sync,
         full_transcription,
         rag_context,
-        previous_structured_notes
+        previous_structured_notes,
+        template,
     )
     
     return {
@@ -66,7 +69,8 @@ async def synthesize_structured_notes(
 def _synthesize_sync(
     full_transcription: str,
     rag_context: List[str],
-    previous_notes: Optional[str]
+    previous_notes: Optional[str],
+    template: str,
 ) -> str:
     """Synchronous synthesis function."""
     
@@ -87,7 +91,9 @@ Rules:
 2. Use document context for correct terminology
 3. Write clear, educational notes
 4. Use ## for topics, ### for subtopics, bullets for details
-5. Use **bold** for key terms"""
+5. Use **bold** for key terms
+
+Style instruction: """ + template_instruction(template)
 
     # Concise user prompt to avoid token limits
     # Limit context to avoid payload too large errors
@@ -105,7 +111,8 @@ REFERENCE MATERIAL:
 PREVIOUS NOTES:
 {limited_previous}
 
-Create organized notes with ## headers, ### subheaders, and bullet points. Fix all errors."""
+Create organized notes with ## headers, ### subheaders, and bullet points. Fix all errors.
+Every factual claim MUST end in one or more source tags such as [C1]. Only use source IDs supplied above."""
 
     try:
         print(f"🤖 Calling GROQ API for synthesis...")

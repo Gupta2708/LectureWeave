@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from database.mongodb_connection import init_mongodb, close_mongodb
+from database.mongodb_connection import init_mongodb, close_mongodb, setup_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Application startup")
     init_mongodb()
+    await setup_indexes()
     try:
         yield
     finally:

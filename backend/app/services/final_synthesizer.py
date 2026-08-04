@@ -19,6 +19,7 @@ import os
 
 # Import from existing services
 from app.core.config import settings
+from app.services.synthesis.templates import template_instruction
 
 # Try to import Groq
 try:
@@ -45,8 +46,9 @@ except Exception:
 class FinalSynthesizer:
     """Synthesizes final comprehensive notes from accumulated structured notes"""
     
-    def __init__(self, lecture_id: str):
+    def __init__(self, lecture_id: str, template: str = "detailed"):
         self.lecture_id = lecture_id
+        self.template = template
         self.groq_client = None
         
         if GROQ_AVAILABLE and settings.GROQ_API_KEY:
@@ -58,7 +60,8 @@ class FinalSynthesizer:
     def synthesize(
         self,
         structured_notes_list: List[str],
-        rag_context: Optional[List[str]] = None
+        rag_context: Optional[List[str]] = None,
+        author_markers: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Synthesize final comprehensive notes
@@ -73,6 +76,10 @@ class FinalSynthesizer:
         if not structured_notes_list:
             return self._empty_result()
         
+        # Author markers are user-authored context, not model inferences.
+        if author_markers:
+            marker_lines = [f"- {item.get('type', 'marker')} at {item.get('start_ms', 0)}ms: {item.get('note', '')}" for item in author_markers]
+            structured_notes_list = [*structured_notes_list, "## Author-flagged moments\n" + "\n".join(marker_lines)]
         # Combine all structured notes
         combined_notes = "\n\n---\n\n".join(structured_notes_list)
         
@@ -250,7 +257,9 @@ FORMAT:
 - Main point (brief)
 - Sub-point with detail
 - Formula: $$LaTeX$$
-- Example if relevant"""
+- Example if relevant
+
+Style instruction: """ + template_instruction(self.template)
 
         user_prompt = f"""Topic: {section_name}
 
@@ -266,6 +275,7 @@ Create CONCISE notes:
 3. Write in bullet points (10-20 words each)
 4. Include formulas in $$LaTeX$$ format
 5. Max 8-10 bullets total
+6. End every factual claim with a valid source tag such as [C1]; use only source IDs in DOCUMENT CONTENT.
 
 Output format:
 - Point 1
@@ -494,7 +504,9 @@ Return JSON: {{"takeaways": ["Concise point 1", "Concise point 2", ...]}}"""
 async def synthesize_final_notes(
     lecture_id: str,
     structured_notes_list: List[str],
-    rag_context: Optional[List[str]] = None
+    rag_context: Optional[List[str]] = None,
+    template: str = "detailed",
+    author_markers: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Async wrapper for final synthesis
@@ -509,7 +521,7 @@ async def synthesize_final_notes(
     """
     import asyncio
     
-    synthesizer = FinalSynthesizer(lecture_id)
+    synthesizer = FinalSynthesizer(lecture_id, template)
     
     # Run in executor to avoid blocking
     loop = asyncio.get_event_loop()
@@ -517,7 +529,8 @@ async def synthesize_final_notes(
         None,
         synthesizer.synthesize,
         structured_notes_list,
-        rag_context
+        rag_context,
+        author_markers,
     )
     
     return result

@@ -13,18 +13,22 @@ import {
   CheckCircle,
   Loader
 } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
 import toast from 'react-hot-toast';
 import AudioRecorder from '../utils/audioRecorder';
 import ReactMarkdown from 'react-markdown';
 import { createLectureSocket } from '../api/websocketClient';
 import { uploadAudioChunk } from '../api/endpoints/audio';
+import { updateLectureTemplate } from '../api/endpoints/lectures';
+import ProcessingStatus from '../features/recording/ProcessingStatus';
+import TranscriptSegmentEditor from '../features/transcripts/TranscriptSegmentEditor';
+import LectureMarkerButton from '../features/markers/LectureMarkerButton';
+import NoteTemplateSelector from '../features/notes/NoteTemplateSelector';
+import ExportNotesMenu from '../features/notes/ExportNotesMenu';
 
 const LiveLecture = () => {
   const { subjectId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { getAuthHeader } = useAuth();
   
   // State
   const [isRecording, setIsRecording] = useState(false);
@@ -36,6 +40,8 @@ const LiveLecture = () => {
   const [enhancedNotes, setEnhancedNotes] = useState([]);
   const [structuredNotes, setStructuredNotes] = useState([]);
   const [finalNotes, setFinalNotes] = useState(null);
+  const [processingStatus, setProcessingStatus] = useState(null);
+  const [markers, setMarkers] = useState([]);
   
   // Refs
   const websocketRef = useRef(null);
@@ -45,6 +51,7 @@ const LiveLecture = () => {
   // Get lecture data from navigation state
   const lectureData = location.state || {};
   const { lectureId, lectureTitle, subjectName } = lectureData;
+  const [template, setTemplate] = useState(lectureData.template || 'detailed');
   
   // Helper function to format timestamp
   const formatTimestamp = (timestamp) => {
@@ -127,6 +134,9 @@ const LiveLecture = () => {
         setTranscriptions(prev => [...prev, {
           id: data.chunk_number || Date.now(),
           timestamp: data.timestamp,
+          segment_id: data.segment_id,
+          start_ms: data.start_ms,
+          end_ms: data.end_ms,
           text: data.content,  // Backend sends 'content', not 'text'
           enhanced_notes: data.enhanced_notes,  // Also store enhanced notes
           importance: data.importance || 0
@@ -140,6 +150,10 @@ const LiveLecture = () => {
             timestamp: data.timestamp
           }]);
         }
+        break;
+
+      case 'job_status':
+        setProcessingStatus(data);
         break;
         
       case 'structured_notes':
@@ -173,6 +187,17 @@ const LiveLecture = () => {
         
       default:
         console.log('Unknown message type:', data.type);
+    }
+  };
+
+  const changeTemplate = async (nextTemplate) => {
+    setTemplate(nextTemplate);
+    if (!lectureId) return;
+    try {
+      await updateLectureTemplate(lectureId, nextTemplate);
+      websocketRef.current?.send(JSON.stringify({ type: 'set_template', template: nextTemplate }));
+    } catch {
+      toast.error('Could not update note style');
     }
   };
 
@@ -356,6 +381,11 @@ const LiveLecture = () => {
                   </>
                 )}
               </div>
+              <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
+                <NoteTemplateSelector value={template} onChange={changeTemplate} />
+                <LectureMarkerButton lectureId={lectureId} startMs={duration * 1000} onCreated={(marker) => setMarkers((previous) => [...previous, marker])} />
+              </div>
+              <ProcessingStatus status={processingStatus} />
             </div>
 
             {/* Real-Time Transcription */}
@@ -373,29 +403,9 @@ const LiveLecture = () => {
                     <p>Transcription will appear here...</p>
                   </div>
                 ) : (
-                  transcriptions.map((trans, idx) => (
-                    <div key={trans.id} className="p-3 bg-gray-50 rounded-lg">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Clock className="w-4 h-4 text-gray-400" />
-                        <span className="text-xs text-gray-500">
-                          Chunk {idx + 1} - {formatTimestamp(trans.timestamp)}
-                        </span>
-                        {trans.importance > 0.7 && (
-                          <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">
-                            Important
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">{trans.text}</p>
-                      {trans.enhanced_notes && (
-                        <div className="mt-2 pt-2 border-t border-gray-200">
-                          <p className="text-xs text-gray-500 mb-1">Enhanced Notes:</p>
-                          <p className="text-sm text-green-700">{trans.enhanced_notes}</p>
-                        </div>
-                      )}
-                    </div>
-                  ))
+                  transcriptions.map((trans) => <TranscriptSegmentEditor key={trans.id} segment={trans} onSaved={(text) => setTranscriptions((items) => items.map((item) => item.id === trans.id ? { ...item, text } : item))} />)
                 )}
+                {markers.length > 0 && <div className="text-xs text-amber-700">Markers: {markers.map((marker) => marker.type).join(', ')}</div>}
               </div>
             </div>
           </div>
@@ -471,6 +481,7 @@ const LiveLecture = () => {
                   <Save className="w-4 h-4" />
                   Save
                 </button>
+                <ExportNotesMenu lectureId={lectureId} title={finalNotes?.title || lectureTitle} />
                 <button
                   onClick={downloadNotes}
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"

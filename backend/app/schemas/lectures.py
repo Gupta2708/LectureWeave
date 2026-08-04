@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pydantic import BaseModel, Field
+from app.schemas.notes import NoteTemplate
 
 
 class LectureCreate(BaseModel):
@@ -11,6 +12,7 @@ class LectureCreate(BaseModel):
 
     subject_id: str = Field(..., description="Owning subject id")
     title: str = Field(default="New Lecture", description="Lecture title")
+    template: NoteTemplate = NoteTemplate.detailed
 
 
 class LectureCreated(BaseModel):

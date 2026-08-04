@@ -10,16 +10,40 @@ import logging
 from pathlib import Path
 from typing import List
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.auth import get_current_user
 from app.core.config import settings
 from app.services.document_processor_mongodb import process_document
-from database.mongodb_connection import user_owns_lecture
+from app.services.retries import retry_document
+from database.mongodb_connection import get_db, user_owns_lecture
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
+
+
+def _id_filter(value: str) -> dict:
+    values = [value]
+    try: values.append(ObjectId(value))
+    except Exception: pass
+    return {"$in": values}
+
+
+@router.get("/{document_id}")
+async def get_document_status(document_id: str, current_user: dict = Depends(get_current_user)):
+    document = await get_db().documents.find_one({"_id": _id_filter(document_id)})
+    if not document or not await user_owns_lecture(document["lecture_id"], current_user["user_id"]):
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"id": str(document["_id"]), "lecture_id": document["lecture_id"], "filename": document["filename"], "status": document.get("status", "uploaded"), "error": document.get("error"), "retry_count": document.get("retry_count", 0), "page_count": document.get("page_count"), "slide_count": document.get("slide_count")}
+
+
+@router.post("/{document_id}/retry")
+async def retry_document_processing(document_id: str, current_user: dict = Depends(get_current_user)):
+    if not await retry_document(current_user["user_id"], document_id):
+        raise HTTPException(status_code=404, detail="Document not found or retry limit reached")
+    return {"success": True, "message": "Document retry queued"}
 
 
 @router.post("/lecture/{lecture_id}/upload")

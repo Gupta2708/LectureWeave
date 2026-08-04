@@ -14,9 +14,13 @@ import {
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { formatDuration } from '../lib/utils.js'
-import ReactMarkdown from 'react-markdown'
 import toast from 'react-hot-toast'
-import { getLectureNotes } from '../api/endpoints/notes'
+import { getLectureNotes, regenerateLectureNotes } from '../api/endpoints/notes'
+import ExportNotesMenu from '../features/notes/ExportNotesMenu'
+import CitationMarkdown from '../features/citations/CitationMarkdown'
+import CitationDrawer from '../features/citations/CitationDrawer'
+import TopicNavigation from '../features/topics/TopicNavigation'
+import { generateTopics, getTopics } from '../api/endpoints/topics'
 
 const safeDate = (value, pattern) => {
   if (!value) return null
@@ -34,6 +38,8 @@ export default function NotesViewer() {
   const [error, setError] = useState(null)
   const [lecture, setLecture] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [activeCitation, setActiveCitation] = useState(null)
+  const [topics, setTopics] = useState([])
 
   useEffect(() => {
     let active = true
@@ -71,6 +77,10 @@ export default function NotesViewer() {
     }
   }, [realId])
 
+  useEffect(() => { if (realId) getTopics(realId).then((response) => setTopics(response.data.topics || [])).catch(() => {}); }, [realId])
+
+  const buildTopics = async () => { try { const response = await generateTopics(realId); setTopics(response.data.topics || []); toast.success('Topics generated'); } catch { toast.error('Could not generate topics'); } }
+
   const finalNotes = lecture?.final_notes || null
   const structured = Array.isArray(lecture?.structured_notes)
     ? lecture.structured_notes
@@ -87,6 +97,7 @@ export default function NotesViewer() {
     ''
 
   const title = finalNotes?.title || lecture?.title || 'Lecture Notes'
+  const citations = finalNotes?.citations || []
   const createdLabel = safeDate(lecture?.created_at, 'MMM d, yyyy')
   const updatedLabel = safeDate(lecture?.updated_at || lecture?.created_at, 'MMM d, yyyy HH:mm')
 
@@ -121,6 +132,15 @@ export default function NotesViewer() {
   }
 
   const printNotes = () => window.print()
+
+  const regenerate = async () => {
+    try {
+      await regenerateLectureNotes(realId)
+      toast.success('Notes regenerated; refresh to view them')
+    } catch {
+      toast.error('Could not regenerate notes')
+    }
+  }
 
   if (loading) {
     return (
@@ -208,6 +228,9 @@ export default function NotesViewer() {
               >
                 <Download className="w-5 h-5" />
               </button>
+              <ExportNotesMenu lectureId={realId} title={title} />
+              <button onClick={regenerate} className="text-sm text-primary-600 hover:text-primary-700">Regenerate</button>
+              <button onClick={buildTopics} className="text-sm text-primary-600 hover:text-primary-700">Topics</button>
             </div>
           </div>
         </div>
@@ -216,9 +239,10 @@ export default function NotesViewer() {
       {/* Content */}
       <div className="max-w-4xl mx-auto px-6 py-8">
         <div className="card">
+          <TopicNavigation topics={topics} onSelect={(topic) => toast(`Topic: ${topic.title}`)} />
           {markdown ? (
             <div className="prose prose-secondary max-w-none">
-              <ReactMarkdown>{markdown}</ReactMarkdown>
+              <CitationMarkdown markdown={markdown} onCitation={(id) => setActiveCitation(citations.find((citation) => citation.id === id) || null)} />
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-16 text-center text-secondary-500">
@@ -243,6 +267,7 @@ export default function NotesViewer() {
           )}
         </div>
       </div>
+      <CitationDrawer citation={activeCitation} onClose={() => setActiveCitation(null)} />
     </div>
   )
 }

@@ -47,6 +47,26 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     VECTOR_INDEX_NAME: str = "vector_search"
 
+    # ---- Document processing and retrieval ----
+    DOCUMENT_CHUNKER: str = "structure"  # structure | legacy
+    DOCUMENT_CHUNK_SIZE: int = 1200
+    DOCUMENT_CHUNK_OVERLAP: int = 150
+    DOCUMENT_MIN_CHUNK_SIZE: int = 200
+    RETRIEVAL_VECTOR_LIMIT: int = 10
+    RETRIEVAL_KEYWORD_LIMIT: int = 10
+    RETRIEVAL_FINAL_LIMIT: int = 5
+    RETRIEVAL_MIN_SCORE: float = 0.0
+    RETRIEVAL_VECTOR_WEIGHT: float = 0.6
+    RETRIEVAL_KEYWORD_WEIGHT: float = 0.4
+    RETRIEVAL_HEADING_BOOST: float = 0.1
+    PROCESSING_MAX_RETRIES: int = 3
+    CHAT_MAX_HISTORY_MESSAGES: int = 6
+    CHAT_MAX_CONTEXT_CHUNKS: int = 8
+    FLASHCARD_DEFAULT_COUNT: int = 10
+    QUIZ_DEFAULT_COUNT: int = 10
+    TOPIC_MIN_DURATION_SECONDS: int = 90
+    TOPIC_SIMILARITY_THRESHOLD: float = 0.35
+
     # ---- LLM (Groq) ----
     GROQ_API_KEY: Optional[str] = None
     GROQ_MODEL: str = "llama-3.1-8b-instant"

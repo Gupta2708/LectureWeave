@@ -7,3 +7,6 @@ export const uploadLectureDocument = (lectureId, file) => {
   form.append('files', file);
   return httpClient.post(`/api/documents/lecture/${lectureId}/upload`, form);
 };
+
+export const getDocumentStatus = (documentId) => httpClient.get(`/api/documents/${documentId}`);
+export const retryDocument = (documentId) => httpClient.post(`/api/documents/${documentId}/retry`);

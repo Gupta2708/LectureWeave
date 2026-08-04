@@ -14,6 +14,9 @@ import {
   Play
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import NoteTemplateSelector from '../features/notes/NoteTemplateSelector';
+import DocumentStatusCard from '../features/documents/DocumentStatusCard';
+import RetryProcessingButton from '../features/documents/RetryProcessingButton';
 
 const LectureSetup = () => {
   const navigate = useNavigate();
@@ -27,6 +30,7 @@ const LectureSetup = () => {
   const [documents, setDocuments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [template, setTemplate] = useState('detailed');
 
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
@@ -59,11 +63,12 @@ const LectureSetup = () => {
     
     for (let i = 0; i < documents.length; i++) {
       try {
-        await uploadLectureDocument(lectureId, documents[i].file);
+        const response = await uploadLectureDocument(lectureId, documents[i].file);
+        const uploaded = response.data?.files?.[0];
 
         setDocuments(prev => {
           const updated = [...prev];
-          updated[i].uploaded = true;
+          updated[i] = { ...updated[i], uploaded: true, documentId: uploaded?.document_id, status: uploaded?.status };
           return updated;
         });
       } catch (error) {
@@ -88,6 +93,7 @@ const LectureSetup = () => {
       const response = await createLecture({
         title: lectureTitle,
         subject_id: subjectId,
+        template,
       });
 
       const lectureId = response.data.id;
@@ -106,6 +112,7 @@ const LectureSetup = () => {
           lectureTitle,
           subjectName,
           subjectCode,
+          template,
           documents: documents.map(d => d.name)
         }
       });
@@ -151,6 +158,7 @@ const LectureSetup = () => {
               placeholder="e.g., Introduction to Neural Networks"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             />
+            <div className="mt-4"><NoteTemplateSelector value={template} onChange={setTemplate} /></div>
           </div>
 
           {/* Document Upload */}
@@ -202,6 +210,7 @@ const LectureSetup = () => {
                     >
                       <X className="w-4 h-4 text-gray-500" />
                     </button>
+                    {doc.documentId && <div className="ml-8"><DocumentStatusCard documentId={doc.documentId} /><RetryProcessingButton documentId={doc.documentId} /></div>}
                   </div>
                 ))}
               </div>

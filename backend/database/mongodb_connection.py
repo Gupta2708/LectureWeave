@@ -38,6 +38,28 @@ async def user_owns_lecture(lecture_id: str, user_id: str) -> bool:
     )
     return lecture is not None
 
+
+async def user_owns_subject(subject_id: str, user_id: str) -> bool:
+    """Return True only when the requested subject belongs to ``user_id``."""
+    if not user_id:
+        return False
+    db = get_db()
+    subject_ids: List[Any] = [subject_id]
+    try:
+        subject_ids.append(ObjectId(subject_id))
+    except Exception:
+        pass
+    subject = await db.subjects.find_one(
+        {"_id": {"$in": subject_ids}, "user_id": user_id}, {"_id": 1}
+    )
+    return subject is not None
+
+
+async def get_lecture_template(lecture_id: str) -> str:
+    """Return a lecture's validated template, defaulting safely for old rows."""
+    lecture = await get_db().lectures.find_one({"_id": _lecture_id_filter(lecture_id)}, {"template": 1})
+    return (lecture or {}).get("template", "detailed")
+
 # Global MongoDB client
 _client: Optional[AsyncIOMotorClient] = None
 _sync_client: Optional[MongoClient] = None
@@ -105,14 +127,27 @@ async def setup_indexes():
     
     # Documents collection
     await db.documents.create_index([("lecture_id", ASCENDING)])
+    await db.documents.create_index([("lecture_id", ASCENDING), ("status", ASCENDING)])
     
     # Document embeddings collection (for vector search)
     await db.document_embeddings.create_index([("lecture_id", ASCENDING)])
     await db.document_embeddings.create_index([("document_id", ASCENDING)])
+    await db.document_embeddings.create_index(
+        [("lecture_id", ASCENDING), ("document_id", ASCENDING), ("chunk_index", ASCENDING)],
+        unique=True,
+    )
+    # MongoDB text search is supported on Atlas M0 and is the keyword tier of
+    # hybrid retrieval. It deliberately excludes ownership from the index:
+    # callers must always add their lecture metadata filter.
+    await db.document_embeddings.create_index(
+        [("chunk_text", "text"), ("section_heading", "text")],
+        name="document_embedding_text",
+    )
     
     # Transcriptions collection
     await db.transcriptions.create_index([("lecture_id", ASCENDING)])
     await db.transcriptions.create_index([("lecture_id", ASCENDING), ("chunk_index", ASCENDING)], unique=True)
+    await db.transcriptions.create_index([("lecture_id", ASCENDING), ("seq", ASCENDING)], unique=True)
     
     # Structured notes collection
     await db.structured_notes.create_index([("lecture_id", ASCENDING)])
@@ -120,6 +155,16 @@ async def setup_indexes():
     
     # Final notes collection
     await db.final_notes.create_index([("lecture_id", ASCENDING)], unique=True)
+
+    await db.processing_jobs.create_index([("user_id", ASCENDING), ("status", ASCENDING)])
+    await db.processing_jobs.create_index([("target_type", ASCENDING), ("target_id", ASCENDING)])
+    await db.lecture_markers.create_index([("lecture_id", ASCENDING), ("start_ms", ASCENDING)])
+    await db.lecture_topics.create_index([("lecture_id", ASCENDING), ("start_ms", ASCENDING)])
+    await db.chat_sessions.create_index([("user_id", ASCENDING), ("subject_id", ASCENDING), ("updated_at", DESCENDING)])
+    await db.chat_messages.create_index([("session_id", ASCENDING), ("created_at", ASCENDING)])
+    await db.flashcards.create_index([("user_id", ASCENDING), ("subject_id", ASCENDING), ("topic", ASCENDING)])
+    await db.flashcards.create_index([("subject_id", ASCENDING), ("normalised_question", ASCENDING)], unique=True)
+    await db.quizzes.create_index([("user_id", ASCENDING), ("subject_id", ASCENDING), ("lecture_id", ASCENDING)])
     
     print("✅ MongoDB indexes created successfully!")
 
@@ -158,7 +203,7 @@ def create_vector_search_index_config():
 
 # CRUD Operations
 
-async def create_lecture(user_id: str, subject_id: str, title: str) -> str:
+async def create_lecture(user_id: str, subject_id: str, title: str, template: str = "detailed") -> str:
     """Create a new lecture"""
     db = get_db()
     
@@ -168,6 +213,7 @@ async def create_lecture(user_id: str, subject_id: str, title: str) -> str:
         "title": title,
         "status": "in_progress",
         "duration": 0,
+        "template": template,
         "metadata": {},
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
@@ -176,8 +222,16 @@ async def create_lecture(user_id: str, subject_id: str, title: str) -> str:
     result = await db.lectures.insert_one(lecture)
     return str(result.inserted_id)
 
-async def save_document(lecture_id: str, filename: str, file_type: str, 
-                       file_path: str, content: str) -> str:
+async def save_document(
+    lecture_id: str,
+    filename: str,
+    file_type: str,
+    file_path: str,
+    content: str,
+    *,
+    page_count: Optional[int] = None,
+    slide_count: Optional[int] = None,
+) -> str:
     """Save document metadata"""
     db = get_db()
     
@@ -190,13 +244,18 @@ async def save_document(lecture_id: str, filename: str, file_type: str,
         "file_size": len(content),
         "metadata": {},
         "upload_date": datetime.utcnow(),
-        "processed": False
+        "processed": False,
+        "status": "uploaded",
+        "error": None,
+        "retry_count": 0,
+        "page_count": page_count,
+        "slide_count": slide_count,
     }
     
     result = await db.documents.insert_one(document)
     return str(result.inserted_id)
 
-async def save_document_embeddings(embeddings_data: List[Dict[str, Any]]) -> None:
+async def save_document_embeddings(embeddings_data: List[Dict[str, Any]]) -> List[str]:
     """
     Save document chunks with embeddings for vector search
     
@@ -222,6 +281,14 @@ async def save_document_embeddings(embeddings_data: List[Dict[str, Any]]) -> Non
             "document_id": item['document_id'],
             "chunk_text": item['chunk_text'],
             "chunk_index": item['chunk_index'],
+            "page_number": item.get("page_number"),
+            "slide_number": item.get("slide_number"),
+            "section_heading": item.get("section_heading"),
+            "paragraph_index": item.get("paragraph_index"),
+            "prev_chunk_id": item.get("prev_chunk_id"),
+            "next_chunk_id": item.get("next_chunk_id"),
+            "embedding_model": item.get("embedding_model", settings.EMBEDDING_MODEL),
+            "embedding_model_version": item.get("embedding_model_version"),
             "embedding": item['embedding'].tolist() if isinstance(item['embedding'], np.ndarray) else item['embedding'],
             "metadata": item.get('metadata', {}),
             "created_at": datetime.utcnow()
@@ -229,11 +296,26 @@ async def save_document_embeddings(embeddings_data: List[Dict[str, Any]]) -> Non
         documents.append(doc)
     
     if documents:
-        await db.document_embeddings.insert_many(documents)
-        print(f"✅ Saved {len(documents)} document embeddings")
+        result = await db.document_embeddings.insert_many(documents)
+        inserted_ids = [str(item_id) for item_id in result.inserted_ids]
+        for index, item_id in enumerate(result.inserted_ids):
+            await db.document_embeddings.update_one(
+                {"_id": item_id},
+                {"$set": {
+                    "prev_chunk_id": inserted_ids[index - 1] if index else None,
+                    "next_chunk_id": inserted_ids[index + 1] if index + 1 < len(inserted_ids) else None,
+                }},
+            )
+        return inserted_ids
+    return []
 
-async def vector_search(query_embedding: np.ndarray, lecture_id: str, 
-                       top_k: int = 10) -> List[Dict]:
+async def vector_search(
+    query_embedding: np.ndarray,
+    lecture_id: Optional[str] = None,
+    top_k: int = 10,
+    *,
+    metadata_filter: Optional[Dict[str, Any]] = None,
+) -> List[Dict]:
     """
     Perform vector similarity search using MongoDB Atlas Vector Search
     
@@ -245,18 +327,17 @@ async def vector_search(query_embedding: np.ndarray, lecture_id: str,
     # Convert numpy array to list
     query_vector = query_embedding.tolist() if isinstance(query_embedding, np.ndarray) else query_embedding
     
+    search_filter = metadata_filter or {"lecture_id": lecture_id}
     # MongoDB Atlas Vector Search aggregation pipeline
     pipeline = [
         {
             "$search": {
-                "index": "vector_search",  # Name of your Atlas Search index
+                "index": settings.VECTOR_INDEX_NAME,
                 "knnBeta": {
                     "vector": query_vector,
                     "path": "embedding",
                     "k": top_k,
-                    "filter": {
-                        "lecture_id": lecture_id
-                    }
+                    "filter": search_filter
                 }
             }
         },
@@ -265,7 +346,12 @@ async def vector_search(query_embedding: np.ndarray, lecture_id: str,
                 "_id": 1,
                 "chunk_text": 1,
                 "document_id": 1,
+                "lecture_id": 1,
                 "chunk_index": 1,
+                "section_heading": 1,
+                "page_number": 1,
+                "slide_number": 1,
+                "embedding_model": 1,
                 "score": {"$meta": "searchScore"}
             }
         },
@@ -280,14 +366,24 @@ async def vector_search(query_embedding: np.ndarray, lecture_id: str,
             "chunk_id": str(doc["_id"]),
             "chunk_text": doc["chunk_text"],
             "similarity": doc["score"],
-            "document_id": doc["document_id"]
+            "document_id": doc["document_id"],
+            "lecture_id": doc.get("lecture_id"),
+            "section_heading": doc.get("section_heading"),
+            "page_number": doc.get("page_number"),
+            "slide_number": doc.get("slide_number"),
+            "embedding_model": doc.get("embedding_model"),
         })
     
     return results
 
 # Fallback: Simple cosine similarity (if Atlas Search not available)
-async def simple_vector_search(query_embedding: np.ndarray, lecture_id: str, 
-                              top_k: int = 10) -> List[Dict]:
+async def simple_vector_search(
+    query_embedding: np.ndarray,
+    lecture_id: Optional[str] = None,
+    top_k: int = 10,
+    *,
+    metadata_filter: Optional[Dict[str, Any]] = None,
+) -> List[Dict]:
     """
     Fallback vector search using simple cosine similarity
     Use this if Atlas Search index is not set up yet
@@ -295,94 +391,32 @@ async def simple_vector_search(query_embedding: np.ndarray, lecture_id: str,
     db = get_db()
     
     # Get all embeddings for this lecture
-    cursor = db.document_embeddings.find({"lecture_id": lecture_id})
+    cursor = db.document_embeddings.find(metadata_filter or {"lecture_id": lecture_id})
     
     results = []
     async for doc in cursor:
         # Calculate cosine similarity
         doc_embedding = np.array(doc['embedding'])
-        similarity = np.dot(query_embedding, doc_embedding) / (
-            np.linalg.norm(query_embedding) * np.linalg.norm(doc_embedding)
-        )
+        denominator = np.linalg.norm(query_embedding) * np.linalg.norm(doc_embedding)
+        if not denominator:
+            continue
+        similarity = np.dot(query_embedding, doc_embedding) / denominator
         
         results.append({
             "chunk_id": str(doc["_id"]),
             "chunk_text": doc["chunk_text"],
             "similarity": float(similarity),
-            "document_id": doc["document_id"]
+            "document_id": doc["document_id"],
+            "lecture_id": doc.get("lecture_id"),
+            "section_heading": doc.get("section_heading"),
+            "page_number": doc.get("page_number"),
+            "slide_number": doc.get("slide_number"),
+            "embedding_model": doc.get("embedding_model"),
         })
     
     # Sort by similarity and return top_k
     results.sort(key=lambda x: x['similarity'], reverse=True)
     return results[:top_k]
-
-async def save_transcription(lecture_id: str, chunk_index: int, text: str,
-                            enhanced_notes: str, timestamp: str, 
-                            importance: float) -> str:
-    """Save transcription chunk"""
-    db = get_db()
-    
-    transcription = {
-        "lecture_id": lecture_id,
-        "chunk_index": chunk_index,
-        "text": text,
-        "enhanced_notes": enhanced_notes,
-        "timestamp": timestamp,
-        "importance": importance,
-        "metadata": {},
-        "created_at": datetime.utcnow()
-    }
-    
-    # Upsert (update if exists, insert if not)
-    result = await db.transcriptions.update_one(
-        {"lecture_id": lecture_id, "chunk_index": chunk_index},
-        {"$set": transcription},
-        upsert=True
-    )
-    
-    return str(result.upserted_id) if result.upserted_id else "updated"
-
-async def save_structured_notes(lecture_id: str, content: str, 
-                               transcription_count: int) -> str:
-    """Save structured notes"""
-    db = get_db()
-    
-    note = {
-        "lecture_id": lecture_id,
-        "content": content,
-        "transcription_count": transcription_count,
-        "metadata": {},
-        "created_at": datetime.utcnow()
-    }
-    
-    result = await db.structured_notes.insert_one(note)
-    return str(result.inserted_id)
-
-async def save_final_notes(lecture_id: str, title: str, markdown: str,
-                          sections: List[Dict], glossary: Dict, 
-                          key_takeaways: List[str]) -> str:
-    """Save final comprehensive notes"""
-    db = get_db()
-    
-    final_note = {
-        "lecture_id": lecture_id,
-        "title": title,
-        "markdown": markdown,
-        "sections": sections,
-        "glossary": glossary,
-        "key_takeaways": key_takeaways,
-        "metadata": {},
-        "created_at": datetime.utcnow()
-    }
-    
-    # Upsert (one final note per lecture)
-    result = await db.final_notes.update_one(
-        {"lecture_id": lecture_id},
-        {"$set": final_note},
-        upsert=True
-    )
-    
-    return str(result.upserted_id) if result.upserted_id else "updated"
 
 async def get_lecture_data(lecture_id: str) -> Dict:
     """Get complete lecture with all related data"""
@@ -397,6 +431,8 @@ async def get_lecture_data(lecture_id: str) -> Dict:
     lecture["transcriptions"] = await db.transcriptions.find(
         {"lecture_id": lecture_id}
     ).to_list(length=None)
+    for transcription in lecture["transcriptions"]:
+        transcription["effective_text"] = effective_transcription_text(transcription)
     
     lecture["structured_notes"] = await db.structured_notes.find(
         {"lecture_id": lecture_id}
@@ -429,15 +465,21 @@ async def update_lecture_status(lecture_id: str, status: str) -> None:
         {"$set": update_data}
     )
 
-async def mark_document_processed(document_id: str) -> None:
-    """Mark document as processed"""
+async def mark_document_processed(
+    document_id: str, status: str = "ready", error: Optional[str] = None
+) -> None:
+    """Apply a document state transition while retaining the legacy flag."""
+    if status not in {"uploaded", "extracting", "chunking", "embedding", "ready", "failed"}:
+        raise ValueError(f"Unknown document status: {status}")
     db = get_db()
     
     await db.documents.update_one(
-        {"_id": document_id},
+        {"_id": _lecture_id_filter(document_id)},
         {"$set": {
-            "processed": True,
-            "processed_at": datetime.utcnow()
+            "processed": status == "ready",
+            "status": status,
+            "error": error,
+            "processed_at": datetime.utcnow() if status == "ready" else None,
         }}
     )
 
@@ -524,6 +566,7 @@ async def get_lecture_with_notes(lecture_id: str, user_id: str) -> Optional[Dict
     # Fetch transcriptions
     async for trans in db.transcriptions.find({"lecture_id": lecture_id}).sort("chunk_index", 1):
         trans["_id"] = str(trans["_id"])
+        trans["effective_text"] = effective_transcription_text(trans)
         lecture["transcriptions"].append(trans)
     
     # Fetch structured notes
@@ -544,16 +587,32 @@ async def get_lecture_with_notes(lecture_id: str, user_id: str) -> Optional[Dict
     
     return lecture
 
-async def save_transcription(lecture_id: str, chunk_index: int, text: str,
-                            enhanced_notes: str, timestamp: str, 
-                            importance: float) -> str:
-    """Save transcription chunk"""
+async def save_transcription(
+    lecture_id: str,
+    chunk_index: int,
+    text: str,
+    enhanced_notes: str,
+    timestamp: str | int,
+    importance: float,
+    *,
+    start_ms: Optional[int] = None,
+    end_ms: Optional[int] = None,
+    seq: Optional[int] = None,
+    citation_ids: Optional[List[str]] = None,
+) -> str:
+    """Idempotently save a transcript segment with editable effective text."""
     db = get_db()
-    
+    sequence = chunk_index if seq is None else seq
     transcription = {
         "lecture_id": lecture_id,
         "chunk_index": chunk_index,
+        # ``text`` remains for backwards-compatible readers.
         "text": text,
+        "raw_text": text,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "seq": sequence,
+        "citation_ids": citation_ids or [],
         "enhanced_notes": enhanced_notes,
         "timestamp": timestamp,
         "importance": importance,
@@ -563,15 +622,23 @@ async def save_transcription(lecture_id: str, chunk_index: int, text: str,
     
     # Upsert (update if exists, insert if not)
     result = await db.transcriptions.update_one(
-        {"lecture_id": lecture_id, "chunk_index": chunk_index},
-        {"$set": transcription},
+        {"lecture_id": lecture_id, "seq": sequence},
+        {"$set": transcription, "$setOnInsert": {"corrected_text": None, "edited_at": None, "edited_by": None}},
         upsert=True
     )
     
-    return str(result.upserted_id) if result.upserted_id else "updated"
+    if result.upserted_id:
+        return str(result.upserted_id)
+    saved = await db.transcriptions.find_one({"lecture_id": lecture_id, "seq": sequence}, {"_id": 1})
+    return str(saved["_id"]) if saved else "updated"
 
-async def save_structured_notes(lecture_id: str, content: str, 
-                               transcription_count: int) -> str:
+
+def effective_transcription_text(transcription: Dict[str, Any]) -> str:
+    """Return the learner-corrected transcript where one exists."""
+    return transcription.get("corrected_text") or transcription.get("raw_text") or transcription.get("text", "")
+
+async def save_structured_notes(lecture_id: str, content: str,
+                               transcription_count: int, citations: Optional[List[Dict]] = None) -> str:
     """Save structured notes"""
     db = get_db()
     
@@ -579,6 +646,7 @@ async def save_structured_notes(lecture_id: str, content: str,
         "lecture_id": lecture_id,
         "content": content,
         "transcription_count": transcription_count,
+        "citations": citations or [],
         "metadata": {},
         "created_at": datetime.utcnow()
     }
@@ -588,7 +656,7 @@ async def save_structured_notes(lecture_id: str, content: str,
 
 async def save_final_notes(lecture_id: str, title: str, markdown: str,
                           sections: List[Dict], glossary: Dict, 
-                          key_takeaways: List[str]) -> str:
+                          key_takeaways: List[str], citations: Optional[List[Dict]] = None) -> str:
     """Save final comprehensive notes"""
     db = get_db()
     
@@ -599,6 +667,7 @@ async def save_final_notes(lecture_id: str, title: str, markdown: str,
         "sections": sections,
         "glossary": glossary,
         "key_takeaways": key_takeaways,
+        "citations": citations or [],
         "metadata": {},
         "created_at": datetime.utcnow()
     }
