@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { 
-  Mic, 
-  MicOff, 
-  Square, 
-  Pause, 
-  Play,
+import {
+  Mic,
+  MicOff,
+  Square,
   Save,
   Download,
   ArrowLeft,
@@ -30,7 +28,6 @@ const LiveLecture = () => {
   
   // State
   const [isRecording, setIsRecording] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
   const [duration, setDuration] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   
@@ -62,7 +59,7 @@ const LiveLecture = () => {
 
   // Timer effect
   useEffect(() => {
-    if (isRecording && !isPaused) {
+    if (isRecording) {
       timerRef.current = setInterval(() => {
         setDuration(prev => prev + 1);
       }, 1000);
@@ -71,13 +68,13 @@ const LiveLecture = () => {
         clearInterval(timerRef.current);
       }
     }
-    
+
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
     };
-  }, [isRecording, isPaused]);
+  }, [isRecording]);
 
   // WebSocket connection
   useEffect(() => {
@@ -227,26 +224,11 @@ const LiveLecture = () => {
     }
   };
 
-  const pauseRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      if (isPaused) {
-        mediaRecorderRef.current.resume();
-        setIsPaused(false);
-        toast.success('Recording resumed');
-      } else {
-        mediaRecorderRef.current.pause();
-        setIsPaused(true);
-        toast.success('Recording paused');
-      }
-    }
-  };
-
   const stopRecording = () => {
     if (audioRecorderRef.current) {
       audioRecorderRef.current.stopRecording();
       setIsRecording(false);
-      setIsPaused(false);
-      
+
       // Request final synthesis
       if (websocketRef.current?.readyState === WebSocket.OPEN) {
         websocketRef.current.send(JSON.stringify({
@@ -345,7 +327,7 @@ const LiveLecture = () => {
                       {formatTime(duration)}
                     </div>
                     <div className="text-sm text-gray-600">
-                      {isRecording ? (isPaused ? 'Paused' : 'Recording...') : 'Ready to record'}
+                      {isRecording ? 'Recording...' : 'Ready to record'}
                     </div>
                   </div>
                 </div>
@@ -364,13 +346,6 @@ const LiveLecture = () => {
                   </button>
                 ) : (
                   <>
-                    <button
-                      onClick={pauseRecording}
-                      className="flex-1 px-6 py-3 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors font-medium flex items-center justify-center gap-2"
-                    >
-                      {isPaused ? <Play className="w-5 h-5" /> : <Pause className="w-5 h-5" />}
-                      {isPaused ? 'Resume' : 'Pause'}
-                    </button>
                     <button
                       onClick={stopRecording}
                       className="flex-1 px-6 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors font-medium flex items-center justify-center gap-2"

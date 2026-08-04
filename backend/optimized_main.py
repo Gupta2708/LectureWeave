@@ -3,7 +3,7 @@ Optimized LectureWeave Backend with Agentic Note Synthesis
 - 20-second audio chunks for transcription
 - 60-second synthesis for structured notes
 """
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import asyncio
@@ -44,7 +44,8 @@ from database.mongodb_connection import (
     save_transcription,
     save_structured_notes,
     save_final_notes,
-    create_lecture
+    create_lecture,
+    user_owns_lecture
 )
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables
@@ -54,7 +55,8 @@ init_mongodb()
 print("✅ MongoDB initialized for document storage and vector search")
 
 # Import and include authentication routes
-from app.api.auth import router as auth_router
+from app.api.auth import router as auth_router, get_current_user
+from app.services.auth_service import verify_token
 from app.api.notes import router as notes_router
 from app.api.subjects_new import router as subjects_router
 from app.api.dashboard import router as dashboard_router
@@ -421,36 +423,19 @@ async def root():
     return {"message": "LectureWeave Optimized Backend - Agentic Note Synthesis"}
 
 
-@app.get("/api/subjects/")
-async def get_subjects():
-    """Get all subjects"""
-    mock_subjects = [
-        {"id": "1", "name": "Machine Learning", "code": "CS-401"},
-        {"id": "2", "name": "Data Structures", "code": "CS-301"}
-    ]
-    return mock_subjects
+# NOTE: authenticated subject endpoints are provided by app/api/subjects_new.py
+# (subjects_router). The previous mock GET /api/subjects/ here was a duplicate
+# that returned placeholder data and has been removed.
 
 
 @app.post("/api/lectures/")
-async def create_lecture_endpoint(data: dict):
-    """Create a new lecture (with optional user authentication)"""
-    from app.api.auth import get_current_user
-    from fastapi import Header
-    from typing import Optional
-    
-    # Try to get user from token (optional for now)
-    user_id = None
-    authorization = data.get("authorization") or data.get("token")
-    
-    if authorization:
-        try:
-            from app.services.auth_service import verify_token
-            user = await verify_token(authorization.replace("Bearer ", ""))
-            if user:
-                user_id = user["user_id"]
-        except:
-            pass
-    
+async def create_lecture_endpoint(
+    data: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """Create a new lecture owned by the authenticated user."""
+    user_id = current_user["user_id"]
+
     # Save to MongoDB and get the generated lecture_id
     try:
         lecture_id = await create_lecture(
@@ -460,9 +445,8 @@ async def create_lecture_endpoint(data: dict):
         )
     except Exception as e:
         logger.error(f"Error creating lecture in MongoDB: {e}")
-        # Fallback to generating ID if MongoDB fails
-        lecture_id = f"lecture-{int(time.time())}"
-    
+        raise HTTPException(status_code=500, detail="Could not create lecture")
+
     return {
         "id": lecture_id,
         "title": data.get("title", "New Lecture"),
@@ -473,8 +457,14 @@ async def create_lecture_endpoint(data: dict):
 
 
 @app.post("/api/documents/lecture/{lecture_id}/upload")
-async def upload_documents(lecture_id: str, files: List[UploadFile] = File(...)):
+async def upload_documents(
+    lecture_id: str,
+    files: List[UploadFile] = File(...),
+    current_user: dict = Depends(get_current_user),
+):
     """Upload documents for a lecture and process them with MongoDB"""
+    if not await user_owns_lecture(lecture_id, current_user["user_id"]):
+        raise HTTPException(status_code=404, detail="Lecture not found or you don't have access")
     try:
         # Create upload directory
         upload_dir = Path("storage/uploads") / lecture_id
@@ -523,9 +513,15 @@ async def upload_documents(lecture_id: str, files: List[UploadFile] = File(...))
 
 
 @app.post("/api/audio/lecture/{lecture_id}/chunk")
-async def receive_audio_chunk(lecture_id: str, audio_file: UploadFile = File(...)):
+async def receive_audio_chunk(
+    lecture_id: str,
+    audio_file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
     """Receive 20-second audio chunk"""
-    
+    if not await user_owns_lecture(lecture_id, current_user["user_id"]):
+        raise HTTPException(status_code=404, detail="Lecture not found or you don't have access")
+
     # Get websocket for this lecture
     websocket = manager.active_connections.get(lecture_id)
     
@@ -539,6 +535,14 @@ async def receive_audio_chunk(lecture_id: str, audio_file: UploadFile = File(...
 @app.websocket("/ws/lecture/{lecture_id}")
 async def websocket_endpoint(websocket: WebSocket, lecture_id: str):
     """WebSocket endpoint for real-time updates"""
+    # Browsers cannot set headers on the WS handshake, so the JWT is passed as a
+    # `?token=` query param. Verify it and the lecture ownership before accepting.
+    token = websocket.query_params.get("token")
+    user = await verify_token(token) if token else None
+    if not user or not await user_owns_lecture(lecture_id, user["user_id"]):
+        await websocket.close(code=4401)
+        return
+
     await manager.connect(lecture_id, websocket)
     
     # Cancel old task if exists (reconnection scenario)

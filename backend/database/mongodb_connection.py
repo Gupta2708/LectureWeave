@@ -4,12 +4,37 @@ Much simpler than PostgreSQL + pgvector!
 """
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient, ASCENDING, DESCENDING
+from bson import ObjectId
 from typing import Optional, List, Dict, Any
 import numpy as np
 from datetime import datetime
 import os
 import time
 from app.core.config import settings
+
+
+def _lecture_id_filter(lecture_id: str):
+    """Build an `_id` filter that matches a lecture whether its `_id` is stored
+    as an ObjectId (the normal case, from `create_lecture`) or as a plain string
+    (the timestamp fallback ids). Avoids ObjectId/str mismatch bugs."""
+    ids: List[Any] = [lecture_id]
+    try:
+        ids.append(ObjectId(lecture_id))
+    except Exception:
+        pass
+    return {"$in": ids}
+
+
+async def user_owns_lecture(lecture_id: str, user_id: str) -> bool:
+    """Return True if the lecture exists and belongs to the given user."""
+    if not user_id:
+        return False
+    db = get_db()
+    lecture = await db.lectures.find_one(
+        {"_id": _lecture_id_filter(lecture_id), "user_id": user_id},
+        {"_id": 1},
+    )
+    return lecture is not None
 
 # Global MongoDB client
 _client: Optional[AsyncIOMotorClient] = None
@@ -485,7 +510,7 @@ async def get_lecture_with_notes(lecture_id: str, user_id: str) -> Optional[Dict
     db = get_db()
     
     # Get lecture and verify ownership
-    lecture = await db.lectures.find_one({"_id": lecture_id, "user_id": user_id})
+    lecture = await db.lectures.find_one({"_id": _lecture_id_filter(lecture_id), "user_id": user_id})
     if not lecture:
         return None
     
