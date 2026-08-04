@@ -2,32 +2,17 @@
 Authentication API endpoints
 """
 from fastapi import APIRouter, HTTPException, Depends, Header
-from pydantic import BaseModel, EmailStr
 from typing import Optional
 
-from app.services.auth_service import (
+from app.db.repositories.users import (
     register_user,
     login_user,
     verify_token,
-    get_user_by_id
+    get_user_by_id,
 )
+from app.schemas.auth import LoginRequest, RegisterRequest  # noqa: F401 (public re-exports)
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
-    username: str
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-class UserResponse(BaseModel):
-    user_id: str
-    email: str
-    username: str
-    token: str
 
 async def get_current_user(authorization: Optional[str] = Header(None)):
     """Dependency to get current user from JWT token"""

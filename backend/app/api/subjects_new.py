@@ -3,31 +3,20 @@ Subject API endpoints with MongoDB and Authentication
 """
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Dict
-from pydantic import BaseModel
 
 from app.api.auth import get_current_user
-from database.mongodb_connection import get_db
-from database.subject_functions import (
+from app.db.mongodb import get_db
+from app.db.repositories.subjects import (
     create_subject,
     get_user_subjects,
     get_subject_by_id,
     update_subject,
     delete_subject,
-    get_subject_lectures
+    get_subject_lectures,
 )
+from app.schemas.subjects import SubjectCreate, SubjectUpdate
 
 router = APIRouter(prefix="/api/subjects", tags=["Subjects"])
-
-# Pydantic models
-class SubjectCreate(BaseModel):
-    name: str
-    code: str
-    description: str = ""
-
-class SubjectUpdate(BaseModel):
-    name: str = None
-    code: str = None
-    description: str = None
 
 @router.post("/")
 async def create_subject_endpoint(
