@@ -16,7 +16,10 @@ import {
   Search,
   X,
   Save,
-  ArrowRight
+  ArrowRight,
+  MessageSquare,
+  Layers,
+  HelpCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -224,11 +227,12 @@ const SubjectsManagement = () => {
             {filteredSubjects.map((subject) => (
               <div
                 key={subject._id}
-                className="bg-white rounded-lg shadow-sm border hover:shadow-md transition-all"
+                className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg"
               >
+                <div className="h-1.5 bg-gradient-to-r from-indigo-500 to-violet-500" />
                 <div className="p-6">
                   <div className="flex items-start justify-between mb-4">
-                    <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-100 to-violet-100">
                       <Folder className="w-6 h-6 text-indigo-600" />
                     </div>
                     <div className="flex gap-2">
@@ -271,10 +275,25 @@ const SubjectsManagement = () => {
                       <ArrowRight className="w-4 h-4" />
                     </button>
                   </div>
-                  <div className="flex gap-2 mt-3 text-xs">
-                    <button onClick={() => navigate(`/subjects/${subject._id}/chat`)} className="text-indigo-700">Chat</button>
-                    <button onClick={() => navigate(`/subjects/${subject._id}/flashcards`)} className="text-indigo-700">Flashcards</button>
-                    <button onClick={() => navigate(`/subjects/${subject._id}/quizzes`)} className="text-indigo-700">Quiz</button>
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <button
+                      onClick={() => navigate(`/subjects/${subject._id}/chat`)}
+                      className="flex flex-col items-center gap-1 rounded-lg border border-gray-200 py-2 text-xs font-medium text-gray-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      <MessageSquare className="h-4 w-4" /> Chat
+                    </button>
+                    <button
+                      onClick={() => navigate(`/subjects/${subject._id}/flashcards`)}
+                      className="flex flex-col items-center gap-1 rounded-lg border border-gray-200 py-2 text-xs font-medium text-gray-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      <Layers className="h-4 w-4" /> Flashcards
+                    </button>
+                    <button
+                      onClick={() => navigate(`/subjects/${subject._id}/quizzes`)}
+                      className="flex flex-col items-center gap-1 rounded-lg border border-gray-200 py-2 text-xs font-medium text-gray-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      <HelpCircle className="h-4 w-4" /> Quiz
+                    </button>
                   </div>
                 </div>
               </div>

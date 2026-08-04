@@ -15,7 +15,9 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AudioRecorder from '../utils/audioRecorder';
-import ReactMarkdown from 'react-markdown';
+import MarkdownView from '../components/MarkdownView';
+import CitationMarkdown from '../features/citations/CitationMarkdown';
+import CitationDrawer from '../features/citations/CitationDrawer';
 import { createLectureSocket } from '../api/websocketClient';
 import { uploadAudioChunk } from '../api/endpoints/audio';
 import { updateLectureTemplate } from '../api/endpoints/lectures';
@@ -42,6 +44,7 @@ const LiveLecture = () => {
   const [finalNotes, setFinalNotes] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
   const [markers, setMarkers] = useState([]);
+  const [activeCitation, setActiveCitation] = useState(null);
   
   // Refs
   const websocketRef = useRef(null);
@@ -163,11 +166,12 @@ const LiveLecture = () => {
           id: Date.now(),
           content: data.content,
           timestamp: new Date().toISOString(),
-          transcription_count: data.transcription_count
+          transcription_count: data.transcription_count,
+          citations: data.citations || []
         }]);
         toast.success('Structured notes updated!');
         break;
-        
+
       case 'final_notes':
         // Final comprehensive notes
         console.log('🎓 Final notes received:', data);
@@ -176,7 +180,8 @@ const LiveLecture = () => {
           markdown: data.markdown,
           sections: data.sections,
           glossary: data.glossary,
-          key_takeaways: data.key_takeaways
+          key_takeaways: data.key_takeaways,
+          citations: data.citations || []
         });
         toast.success('Final notes generated!');
         break;
@@ -249,9 +254,15 @@ const LiveLecture = () => {
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
     if (audioRecorderRef.current) {
-      audioRecorderRef.current.stopRecording();
+      try {
+        await audioRecorderRef.current.stopRecording();
+      } catch (error) {
+        console.error('Error flushing final audio chunk:', error);
+        toast.error('Could not finish uploading the final audio chunk');
+        return;
+      }
       setIsRecording(false);
 
       // Request final synthesis
@@ -389,9 +400,9 @@ const LiveLecture = () => {
             </div>
 
             {/* Real-Time Transcription */}
-            <div className="bg-white rounded-lg shadow-sm border">
-              <div className="p-4 border-b">
-                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="border-b border-blue-100 bg-blue-50/70 px-4 py-3">
+                <h2 className="flex items-center gap-2 font-semibold text-blue-900">
                   <Activity className="w-5 h-5 text-blue-600" />
                   Live Transcription
                 </h2>
@@ -413,11 +424,12 @@ const LiveLecture = () => {
           {/* Right Column - Notes */}
           <div className="space-y-6">
             {/* Enhanced Notes */}
-            <div className="bg-white rounded-lg shadow-sm border">
-              <div className="p-4 border-b">
-                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-green-600" />
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="border-b border-emerald-100 bg-emerald-50/70 px-4 py-3">
+                <h2 className="flex items-center gap-2 font-semibold text-emerald-900">
+                  <FileText className="w-5 h-5 text-emerald-600" />
                   Enhanced Notes
+                  <span className="text-xs font-normal text-emerald-600/80">live, per chunk</span>
                 </h2>
               </div>
               <div className="p-4 max-h-80 overflow-y-auto space-y-2">
@@ -428,7 +440,7 @@ const LiveLecture = () => {
                 ) : (
                   enhancedNotes.map((note) => (
                     <div key={note.id} className="text-sm text-gray-700 p-2 bg-green-50 rounded">
-                      {note.content}
+                      <MarkdownView>{note.content}</MarkdownView>
                     </div>
                   ))
                 )}
@@ -436,12 +448,12 @@ const LiveLecture = () => {
             </div>
 
             {/* Structured Notes */}
-            <div className="bg-white rounded-lg shadow-sm border">
-              <div className="p-4 border-b">
-                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="border-b border-indigo-100 bg-indigo-50/70 px-4 py-3">
+                <h2 className="flex items-center gap-2 font-semibold text-indigo-900">
                   <CheckCircle className="w-5 h-5 text-indigo-600" />
                   Structured Notes
-                  <span className="text-xs text-gray-500">(Updates every 60s)</span>
+                  <span className="text-xs font-normal text-indigo-600/80">(updates ~60s)</span>
                 </h2>
               </div>
               <div className="p-4 max-h-80 overflow-y-auto">
@@ -461,9 +473,10 @@ const LiveLecture = () => {
                             {formatTimestamp(note.timestamp)}
                           </span>
                         </div>
-                        <div className="prose prose-sm max-w-none">
-                          <ReactMarkdown>{note.content}</ReactMarkdown>
-                        </div>
+                        <CitationMarkdown
+                          markdown={note.content}
+                          onCitation={(id) => setActiveCitation((note.citations || []).find((c) => c.id === id) || null)}
+                        />
                       </div>
                     ))}
                   </div>
@@ -496,16 +509,21 @@ const LiveLecture = () => {
 
         {/* Final Notes Section */}
         {finalNotes && (
-          <div className="mt-6 bg-white rounded-lg shadow-sm border p-6">
+          <div className="mt-6 overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm">
+            <div className="h-1.5 bg-gradient-to-r from-amber-400 to-orange-400" />
+            <div className="p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <CheckCircle className="w-6 h-6 text-green-600" />
+              <CheckCircle className="w-6 h-6 text-amber-600" />
               Final Comprehensive Notes
             </h2>
-            <div className="prose max-w-none">
-              <div dangerouslySetInnerHTML={{ __html: finalNotes.markdown?.replace(/\n/g, '<br/>') || '' }} />
+            <CitationMarkdown
+              markdown={finalNotes.markdown || ''}
+              onCitation={(id) => setActiveCitation((finalNotes.citations || []).find((c) => c.id === id) || null)}
+            />
             </div>
           </div>
         )}
+        <CitationDrawer citation={activeCitation} onClose={() => setActiveCitation(null)} />
       </div>
     </div>
   );

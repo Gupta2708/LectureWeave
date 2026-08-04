@@ -12,6 +12,8 @@ class AudioRecorder {
     this.audioChunks = []
     this.sampleRate = 16000 // Whisper-friendly sample rate
     this.onDataAvailable = null
+    this.pendingUploads = new Set()
+    this.source = null
   }
 
   /**
@@ -59,13 +61,13 @@ class AudioRecorder {
     this.audioChunks = []
 
     // Create audio source from microphone
-    const source = this.audioContext.createMediaStreamSource(this.mediaStream)
+    this.source = this.audioContext.createMediaStreamSource(this.mediaStream)
     
     // Create script processor for audio data
     const bufferSize = 4096
     this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1)
     
-    let audioBuffer = []
+    this.audioChunks = []
     let lastChunkTime = Date.now()
 
     this.processor.onaudioprocess = (event) => {
@@ -91,19 +93,19 @@ class AudioRecorder {
         int16Data[i] = Math.max(-32768, Math.min(32767, Math.round(sample)))
       }
       
-      audioBuffer.push(int16Data)
+      this.audioChunks.push(int16Data)
 
       // Check if it's time to send a chunk
       const now = Date.now()
       if (now - lastChunkTime >= chunkDurationMs) {
-        this.sendAudioChunk(audioBuffer)
-        audioBuffer = []
+        void this.sendAudioChunk(this.audioChunks)
+        this.audioChunks = []
         lastChunkTime = now
       }
     }
 
     // Connect audio nodes
-    source.connect(this.processor)
+    this.source.connect(this.processor)
     this.processor.connect(this.audioContext.destination)
 
     console.log('🎵 Recording started with Web Audio API')
@@ -112,12 +114,27 @@ class AudioRecorder {
   /**
    * Stop recording
    */
-  stopRecording() {
+  async stopRecording() {
     this.isRecording = false
+
+    // A lecture can end between 20-second boundaries. Flush that final partial
+    // recording and wait for all HTTP uploads before the page asks the backend
+    // to synthesise notes.
+    if (this.audioChunks.length > 0) {
+      await this.sendAudioChunk(this.audioChunks)
+      this.audioChunks = []
+    }
+
+    await Promise.allSettled([...this.pendingUploads])
     
     if (this.processor) {
       this.processor.disconnect()
       this.processor = null
+    }
+
+    if (this.source) {
+      this.source.disconnect()
+      this.source = null
     }
 
     if (this.mediaStream) {
@@ -135,7 +152,7 @@ class AudioRecorder {
   /**
    * Convert audio buffer to WAV and send
    */
-  sendAudioChunk(audioBuffer) {
+  async sendAudioChunk(audioBuffer) {
     if (audioBuffer.length === 0) return
 
     // Calculate total samples
@@ -168,7 +185,13 @@ class AudioRecorder {
     console.log(`🎵 Generated WAV chunk: ${wavBlob.size} bytes (${finalSampleRate}Hz)`)
     
     if (this.onDataAvailable) {
-      this.onDataAvailable(wavBlob)
+      const upload = Promise.resolve(this.onDataAvailable(wavBlob))
+      this.pendingUploads.add(upload)
+      try {
+        await upload
+      } finally {
+        this.pendingUploads.delete(upload)
+      }
     }
   }
 
