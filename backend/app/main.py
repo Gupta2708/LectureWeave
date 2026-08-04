@@ -1,105 +1,87 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-import uvicorn
-import json
-import asyncio
-from typing import Dict, List
+"""
+LectureWeave — canonical FastAPI application entry point.
+
+This module only:
+  - creates the FastAPI app
+  - applies metadata + middleware
+  - registers exception handlers
+  - includes API routers
+  - registers the lifespan (MongoDB init/close)
+  - exposes /health and /health/ready
+
+All request handling, database access, transcription, synthesis, and
+WebSocket business logic live in dedicated modules under `app/`.
+
+Run in development:
+    uvicorn app.main:app --reload
+Run in production:
+    uvicorn app.main:app --host 0.0.0.0 --port $PORT
+"""
+from __future__ import annotations
+
 import logging
 
-from app.api import subjects, lectures, documents, live_recording
-from app.core.config import settings
+from dotenv import load_dotenv
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Load .env before importing settings so pydantic-settings picks up local vars.
+load_dotenv()
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import settings
+from app.core.lifespan import lifespan
+
+logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 
 app = FastAPI(
-    title="LectureWeave Backend",
-    description="AI-powered lecture note generation system",
-    version="1.0.0"
+    title=settings.PROJECT_NAME,
+    lifespan=lifespan,
 )
 
-# CORS middleware for frontend communication
+# CORS — env-driven; CORS spec forbids credentials + wildcard, and
+# `cors_allow_credentials_effective` downgrades credentials off in that case.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origins_list or ["http://localhost:3000"],
+    allow_credentials=settings.cors_allow_credentials_effective,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount static files for serving uploaded documents
-app.mount("/storage", StaticFiles(directory="storage"), name="storage")
+# --- Routers ------------------------------------------------------------
+from app.api.auth import router as auth_router
+from app.api.notes import router as notes_router
+from app.api.subjects_new import router as subjects_router
+from app.api.dashboard import router as dashboard_router
+from app.api.lectures_new import router as lectures_router
+from app.api.documents_new import router as documents_router
+from app.api.recording import router as recording_router
+from app.api.websocket import router as websocket_router
+from app.api.health import router as health_router
 
-# Include API routers
-app.include_router(subjects.router, prefix="/api/subjects", tags=["subjects"])
-app.include_router(lectures.router, prefix="/api/lectures", tags=["lectures"])
-app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
-app.include_router(live_recording.router, prefix="/api/live", tags=["live-recording"])
+app.include_router(health_router)
+app.include_router(auth_router)
+app.include_router(subjects_router)
+app.include_router(lectures_router)
+app.include_router(documents_router)
+app.include_router(recording_router)
+app.include_router(notes_router)
+app.include_router(dashboard_router)
+app.include_router(websocket_router)
 
-# WebSocket connection manager for live updates
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}
-
-    async def connect(self, websocket: WebSocket, lecture_id: str):
-        await websocket.accept()
-        if lecture_id not in self.active_connections:
-            self.active_connections[lecture_id] = []
-        self.active_connections[lecture_id].append(websocket)
-        logger.info(f"Client connected to lecture {lecture_id}")
-
-    def disconnect(self, websocket: WebSocket, lecture_id: str):
-        if lecture_id in self.active_connections:
-            self.active_connections[lecture_id].remove(websocket)
-            if not self.active_connections[lecture_id]:
-                del self.active_connections[lecture_id]
-        logger.info(f"Client disconnected from lecture {lecture_id}")
-
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
-
-    async def broadcast_to_lecture(self, message: dict, lecture_id: str):
-        if lecture_id in self.active_connections:
-            for connection in self.active_connections[lecture_id]:
-                try:
-                    await connection.send_text(json.dumps(message))
-                except:
-                    # Remove broken connections
-                    self.active_connections[lecture_id].remove(connection)
-
-manager = ConnectionManager()
-
-@app.websocket("/ws/lecture/{lecture_id}")
-async def websocket_endpoint(websocket: WebSocket, lecture_id: str):
-    await manager.connect(websocket, lecture_id)
-    try:
-        while True:
-            # Keep connection alive and handle any client messages
-            data = await websocket.receive_text()
-            # Echo back for now (can be used for client commands)
-            await manager.send_personal_message(f"Echo: {data}", websocket)
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, lecture_id)
 
 @app.get("/")
-async def root():
-    return {
-        "message": "LectureWeave Backend API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
+async def root() -> dict:
+    return {"message": f"{settings.APP_NAME} backend", "service": settings.APP_NAME}
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "lectureweave-backend"}
 
 if __name__ == "__main__":
-    uvicorn.run(
+    import uvicorn as _uvicorn
+
+    _uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.APP_DEBUG,
     )
