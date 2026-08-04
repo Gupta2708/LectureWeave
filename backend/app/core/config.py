@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        # Don't crash the app when a .env or the shell contains a variable we
+        # don't recognise (e.g. legacy names, deployment-injected vars).
+        extra = "ignore"
 
     # ---- Convenience accessors ----
     @property
