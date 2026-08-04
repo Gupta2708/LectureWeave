@@ -76,7 +76,7 @@ async def websocket_endpoint(websocket: WebSocket, lecture_id: str) -> None:
 
             elif msg_type == "stop_recording":
                 logger.info("Stopping recording for lecture %s", lecture_id)
-                await asyncio.sleep(2)  # let any in-flight chunk drain
+                await processor.wait_for_lecture_idle(lecture_id)
                 if len(processor.transcription_buffers[lecture_id]) > 0:
                     await processor.synthesize_notes(lecture_id, websocket)
                 await processor.final_synthesis(lecture_id, websocket)

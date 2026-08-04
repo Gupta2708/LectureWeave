@@ -35,10 +35,23 @@ services:
       HOST: 0.0.0.0
       PORT: 8000
       CORS_ALLOWED_ORIGINS: http://localhost:3000
+      # Persist HuggingFace model downloads (Whisper + Sentence Transformers) in
+      # a named volume so they are fetched once, not on every container start.
+      HF_HOME: /models/hf
+      SENTENCE_TRANSFORMERS_HOME: /models/st
+    # Dev workflow: mount the source and run Uvicorn with --reload so code
+    # changes take effect without rebuilding the image. `/app/storage` and the
+    # model cache stay on their own volumes so the bind mount doesn't shadow
+    # them.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/storage:/app/storage
+      # Source bind-mount also provides /app/storage on the host, so uploaded
+      # files and audio chunks are visible for debugging.
+      - ./backend:/app
+      - model-cache:/models
 
 volumes:
   mongo-data:
+  model-cache:

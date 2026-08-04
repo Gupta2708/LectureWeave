@@ -15,7 +15,7 @@ update, or delete.
 ## Embeddings and indexes
 
 `document_embeddings` stores `lecture_id`, `document_id`, chunk text, section
-metadata, an embedding, and a content hash. Startup creates the regular MongoDB
+metadata, and an embedding. Startup creates the regular MongoDB
 indexes, including a text index used by keyword retrieval.
 
 Atlas Vector Search is optional. If its `VECTOR_INDEX_NAME` index is available,

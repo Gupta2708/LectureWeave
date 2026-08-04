@@ -1,16 +1,15 @@
 """
 Importance scoring service for LectureWeave backend.
-Based on your existing importance_scoring.py
+
+Uses lightweight regex tokenisation rather than NLTK. Importance scoring only
+counts words, sentences, and keywords, which does not need NLTK's statistical
+tokenizer — and depending on it meant a missing `punkt_tab` data file crashed
+the whole audio-processing task at runtime. Pure-Python tokenisation has no
+downloaded-data dependency, so it can never fail on a fresh container.
 """
 import math
-import nltk
+import re
 from typing import Dict, Any, List
-
-# Download required NLTK data
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt")
 
 # Keywords that indicate importance (tuneable)
 KEYWORDS = set([
@@ -19,9 +18,23 @@ KEYWORDS = set([
     "algorithm", "method", "approach", "technique", "strategy", "solution"
 ])
 
+_WORD_RE = re.compile(r"[A-Za-z0-9']+")
+_SENTENCE_RE = re.compile(r"[^.!?]+[.!?]*")
+
+
+def word_tokenize(text: str) -> List[str]:
+    """Regex word tokeniser (no NLTK data dependency)."""
+    return _WORD_RE.findall(text)
+
+
+def sent_tokenize(text: str) -> List[str]:
+    """Split into sentences on terminal punctuation."""
+    return [part.strip() for part in _SENTENCE_RE.findall(text) if part.strip()]
+
+
 def keyword_bonus(text: str) -> float:
     """Basic keyword check - counts how many keywords present / normalized."""
-    words = nltk.word_tokenize(text.lower())
+    words = word_tokenize(text.lower())
     hits = sum(1 for w in words if w in KEYWORDS)
     return min(1.0, hits / 2.0)  # normalize (0..1)
 
@@ -29,7 +42,7 @@ def calculate_speaking_rate(text: str, duration: float) -> float:
     """Calculate words per second."""
     if duration <= 0:
         return 0.0
-    words = nltk.word_tokenize(text)
+    words = word_tokenize(text)
     return len(words) / duration
 
 def score_importance(transcription_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -61,7 +74,7 @@ def score_importance(transcription_data: Dict[str, Any]) -> Dict[str, Any]:
         duration = max(0.001, end_time - start_time)
     else:
         # Fallback: estimate duration (rough estimate: 150 words per minute)
-        words = nltk.word_tokenize(text)
+        words = word_tokenize(text)
         duration = max(0.001, len(words) / 2.5)  # 150 wpm = 2.5 wps
     
     # Component scores
@@ -73,12 +86,12 @@ def score_importance(transcription_data: Dict[str, Any]) -> Dict[str, Any]:
     speaking_rate_score = 1 / (1 + math.exp(-(words_per_sec - 2)))
     
     # Length score (longer segments might be more important)
-    words = nltk.word_tokenize(text)
+    words = word_tokenize(text)
     word_count = len(words)
     length_score = min(1.0, word_count / 20.0)  # Normalize to 20 words
     
     # Sentence structure score (complete sentences are better)
-    sentences = nltk.sent_tokenize(text)
+    sentences = sent_tokenize(text)
     sentence_score = min(1.0, len(sentences) / 3.0)  # Normalize to 3 sentences
     
     # Final weighted importance (tunable weights)

@@ -1,0 +1,15 @@
+# Local secrets are passed to the container at runtime through docker-compose.
+.env
+
+# Local runtime and development artifacts do not belong in the image.
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+storage/
+
+# Version-control/editor metadata.
+.git/
+.idea/
+.vscode/

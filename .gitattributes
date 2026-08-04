@@ -1,0 +1,24 @@
+# Default: git normalises line endings to LF on commit and checks out CRLF on
+# Windows only where the platform expects it. This kills the noisy
+# "LF will be replaced by CRLF" warnings while keeping the repository canonical
+# on LF.
+* text=auto eol=lf
+
+# Explicit binary types — never touch content.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.pdf    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.wav    binary
+*.mp3    binary
+*.mp4    binary
+*.zip    binary
+
+# Shell scripts must stay LF regardless of platform, or they break on Linux.
+*.sh     text eol=lf

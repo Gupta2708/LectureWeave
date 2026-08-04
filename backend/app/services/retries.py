@@ -41,7 +41,7 @@ async def retry_document(user_id: str, document_id: str) -> bool:
             if job_id: await update_job(user_id, job_id, status="running", stage="embedding", ratio=0.1)
             # Reprocess from the original upload. The existing document remains
             # queryable until the new processing succeeds.
-            result = await process_document(document["file_path"], document["lecture_id"], document["filename"])
+            result = await process_document(document["file_path"], document["lecture_id"], document["filename"], document_id=document_id)
             if job_id: await update_job(user_id, job_id, status="succeeded" if result.get("success") else "failed", stage="complete", ratio=1.0, error=result.get("error"))
         except Exception:
             await mark_document_processed(document_id, status="failed", error="Processing failed")

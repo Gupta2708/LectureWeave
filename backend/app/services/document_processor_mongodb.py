@@ -6,9 +6,10 @@ Document processing service with MongoDB vector storage.
 time — retries, notes, tests — can load without pulling in Torch. The actual
 model is still created once and reused thereafter.
 """
+import hashlib
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -18,12 +19,48 @@ from database.mongodb_connection import (
     save_document,
     save_document_embeddings,
     mark_document_processed,
+    get_db,
+    _lecture_id_filter,
 )
 
 logger = logging.getLogger(__name__)
 
 # Global embedder (lazy loaded on first use)
 _embedder = None
+
+
+def _file_hash(file_path: str) -> str:
+    """SHA-256 of the raw file so re-uploads of identical content dedupe."""
+    digest = hashlib.sha256()
+    with open(file_path, "rb") as handle:
+        for block in iter(lambda: handle.read(65536), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+async def create_pending_document(file_path: str, lecture_id: str, filename: str) -> Tuple[str, bool]:
+    """Create (or reuse) a document row and return (document_id, already_ready).
+
+    Reuses an existing ready document with identical content in the same lecture
+    so uploading the same PDF twice does not re-embed it."""
+    file_type = Path(file_path).suffix.lower().lstrip(".")
+    content_hash = _file_hash(file_path)
+    db = get_db()
+    existing = await db.documents.find_one(
+        {"lecture_id": lecture_id, "content_hash": content_hash, "status": "ready"},
+        {"_id": 1},
+    )
+    if existing:
+        return str(existing["_id"]), True
+    document_id = await save_document(
+        lecture_id=lecture_id,
+        filename=filename,
+        file_type=file_type,
+        file_path=str(file_path),
+        content="",
+        content_hash=content_hash,
+    )
+    return document_id, False
 
 
 def get_embedder():
@@ -43,56 +80,76 @@ def get_embedder():
 async def process_document(
     file_path: str,
     lecture_id: str,
-    filename: str
+    filename: str,
+    *,
+    document_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Process a document and store in MongoDB with embeddings.
-    
+
     Args:
         file_path: Path to the document file
         lecture_id: ID of the lecture this document belongs to
         filename: Original filename
-    
+        document_id: When provided, process an already-created (pending) row so
+            the upload endpoint can return immediately and the client can poll
+            status. When None, a new document row is created here.
+
     Returns:
         Dict with document_id, chunk_count, and status
     """
-    print(f"📄 Processing document: {filename}")
-    
+    logger.info("Processing document: %s", filename)
+
+    async def _fail(message: str) -> Dict[str, Any]:
+        """Mark the owned row failed (if any) and return a failure result."""
+        if document_id:
+            try:
+                await mark_document_processed(document_id, status="failed", error=message)
+            except Exception:  # pragma: no cover — defensive
+                logger.exception("Could not mark document %s failed", document_id)
+        return {"success": False, "document_id": document_id, "error": message}
+
     # Extract structural units before creating the document row.
     file_ext = Path(file_path).suffix.lower()
+    if document_id:
+        await mark_document_processed(document_id, status="extracting")
     try:
         extracted = extract_document(file_path)
     except ValueError:
-        return {
-            "success": False,
-            "error": f"Unsupported file type: {file_ext}"
-        }
+        return await _fail(f"Unsupported file type: {file_ext}")
     except Exception as exc:
-        return {"success": False, "error": f"Could not extract document: {exc}"}
+        return await _fail(f"Could not extract document: {exc}")
 
     text = extracted.text
     file_type = extracted.file_type
-    
+
     if not text or len(text.strip()) < 50:
-        return {
-            "success": False,
-            "error": "No text extracted or text too short"
-        }
-    
-    print(f"✅ Extracted {len(text)} characters from {filename}")
-    
-    # Save document metadata to MongoDB
-    document_id = await save_document(
-        lecture_id=lecture_id,
-        filename=filename,
-        file_type=file_type,
-        file_path=file_path,
-        content=text,
-        page_count=extracted.page_count,
-        slide_count=extracted.slide_count,
-    )
-    
-    print(f"✅ Saved document to MongoDB: {document_id}")
+        return await _fail("No text extracted or text too short")
+
+    logger.info("Extracted %d characters from %s", len(text), filename)
+
+    # Persist the extracted text. Either create a new row or fill in the
+    # pending one created by the upload endpoint.
+    if document_id is None:
+        document_id = await save_document(
+            lecture_id=lecture_id,
+            filename=filename,
+            file_type=file_type,
+            file_path=file_path,
+            content=text,
+            page_count=extracted.page_count,
+            slide_count=extracted.slide_count,
+        )
+    else:
+        await get_db().documents.update_one(
+            {"_id": _lecture_id_filter(document_id)},
+            {"$set": {
+                "content": text,
+                "file_type": file_type,
+                "page_count": extracted.page_count,
+                "slide_count": extracted.slide_count,
+            }},
+        )
 
     # Everything from this point owns the document row; any failure must mark it
     # `failed` so the retry endpoint can surface it and the UI does not spin.

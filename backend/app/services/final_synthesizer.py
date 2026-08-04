@@ -192,12 +192,15 @@ Example:
         for section_name in section_names:
             # Find relevant content for this section
             relevant_content = self._find_relevant_content(section_name, note_chunks)
-            
-            # Enhance with RAG if available
+
+            # Enhance with RAG if available. Pass the other section titles so the
+            # model doesn't restate content that belongs to a sibling section.
+            others = [name for name in section_names if name != section_name]
             enhanced_text = self._enhance_section(
                 section_name,
                 relevant_content,
-                rag_context
+                rag_context,
+                other_sections=others,
             )
             
             # Extract formulas
@@ -232,15 +235,17 @@ Example:
         self,
         section_name: str,
         content: str,
-        rag_context: Optional[List[str]]
+        rag_context: Optional[List[str]],
+        other_sections: Optional[List[str]] = None,
     ) -> str:
         """Enhance section with RAG context - CONCISE bullet points with PDF integration"""
-        
+
         if not self.groq_client:
             return content[:800]
-        
+
         # Use MORE context from PDF
         context_text = "\n\n".join(rag_context[:5]) if rag_context else "No document context"
+        other_sections_text = ", ".join(other_sections) if other_sections else "none"
         
         system_prompt = """You are creating CONCISE, STRUCTURED lecture notes.
 
@@ -263,6 +268,10 @@ Style instruction: """ + template_instruction(self.template)
 
         user_prompt = f"""Topic: {section_name}
 
+OTHER SECTIONS in this document (do NOT repeat their content): {other_sections_text}
+Write ONLY what is specific to "{section_name}". If a point belongs to another
+section above, leave it out.
+
 TRANSCRIPTION NOTES (what teacher said):
 {content[:1000]}
 
@@ -275,7 +284,8 @@ Create CONCISE notes:
 3. Write in bullet points (10-20 words each)
 4. Include formulas in $$LaTeX$$ format
 5. Max 8-10 bullets total
-6. End every factual claim with a valid source tag such as [C1]; use only source IDs in DOCUMENT CONTENT.
+6. Do NOT restate the section title or generic definitions already implied elsewhere
+7. End every factual claim with a valid source tag such as [C1]; use only source IDs in DOCUMENT CONTENT.
 
 Output format:
 - Point 1
@@ -444,17 +454,21 @@ Return JSON: {{"takeaways": ["Concise point 1", "Concise point 2", ...]}}"""
             lines.append(f"{i}. [{sec['title']}](#{self._slugify(sec['title'])})")
         lines.append("")
         
-        # Sections
+        # Sections. Track bullet lines across sections so the same point isn't
+        # repeated under multiple headings.
+        seen_bullets: set[str] = set()
         for i, sec in enumerate(sections, 1):
             lines.append(f"## {i}. {sec['title']}\n")
-            lines.append(sec['content'])
+            lines.append(self._dedupe_bullets(sec['content'], seen_bullets))
             lines.append("")
-            
-            # Formulas
+
+            # Formulas. `_extract_formulas` already returns fully-delimited
+            # `$$ ... $$` blocks, so emit them as-is (wrapping again produced the
+            # doubled `$$` artefact).
             if sec.get('formulas'):
                 lines.append("### Key Formulas\n")
                 for formula in sec['formulas']:
-                    lines.append(f"$$\n{formula}\n$$\n")
+                    lines.append(f"{formula}\n")
                 lines.append("")
         
         # Glossary
@@ -482,6 +496,22 @@ Return JSON: {{"takeaways": ["Concise point 1", "Concise point 2", ...]}}"""
                 text = text.rsplit("```", 1)[0]
         return text.strip()
     
+    def _dedupe_bullets(self, content: str, seen: set) -> str:
+        """Drop bullet lines whose normalized text already appeared in an
+        earlier section, so the final document doesn't restate the same point."""
+        out = []
+        for line in (content or "").splitlines():
+            stripped = line.strip()
+            if stripped[:1] in ("-", "*", "+"):
+                key = re.sub(r"\[C\d+\]", "", stripped)
+                key = re.sub(r"[^a-z0-9 ]", "", key.lower()).strip()
+                if key and key in seen:
+                    continue
+                if len(key) > 8:  # only track substantive bullets
+                    seen.add(key)
+            out.append(line)
+        return "\n".join(out)
+
     def _slugify(self, text: str) -> str:
         """Convert text to URL-friendly slug"""
         text = text.lower().strip()

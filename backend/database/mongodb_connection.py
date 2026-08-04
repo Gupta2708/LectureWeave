@@ -231,10 +231,11 @@ async def save_document(
     *,
     page_count: Optional[int] = None,
     slide_count: Optional[int] = None,
+    content_hash: Optional[str] = None,
 ) -> str:
     """Save document metadata"""
     db = get_db()
-    
+
     document = {
         "lecture_id": lecture_id,
         "filename": filename,
@@ -242,6 +243,7 @@ async def save_document(
         "file_path": file_path,
         "content": content,
         "file_size": len(content),
+        "content_hash": content_hash,
         "metadata": {},
         "upload_date": datetime.utcnow(),
         "processed": False,
@@ -422,8 +424,9 @@ async def get_lecture_data(lecture_id: str) -> Dict:
     """Get complete lecture with all related data"""
     db = get_db()
     
-    # Get lecture
-    lecture = await db.lectures.find_one({"_id": lecture_id})
+    # Get lecture. `_lecture_id_filter` matches either ObjectId or plain-string
+    # ids so the lookup works regardless of how the lecture was inserted.
+    lecture = await db.lectures.find_one({"_id": _lecture_id_filter(lecture_id)})
     if not lecture:
         return None
     

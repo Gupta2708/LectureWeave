@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict
 
 from fastapi import UploadFile, WebSocket
+from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import settings
 from app.services.transcribe_whisper import transcribe_local
@@ -64,8 +65,34 @@ class AudioProcessor:
         # Processing queues + background tasks
         self.audio_queues: Dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
         self.processing_tasks: Dict[str, asyncio.Task] = {}
+        self.processing_counts: Dict[str, int] = defaultdict(int)
 
         logger.info("Audio processor initialised")
+
+    async def _send_event(self, websocket: WebSocket, payload: dict) -> bool:
+        """Best-effort live update; persistence must not depend on a browser tab."""
+        try:
+            await websocket.send_json(payload)
+            return True
+        except (WebSocketDisconnect, RuntimeError):
+            logger.info("Skipping live update because the lecture socket is closed")
+            return False
+
+    async def wait_for_lecture_idle(self, lecture_id: str, timeout: float = 120.0) -> None:
+        """Wait until queued and in-flight chunks finish.
+
+        Never blocks forever: bails out if the background task has stopped (so a
+        crashed pipeline can't freeze the Stop button) or if a hard timeout is
+        reached."""
+        deadline = time.monotonic() + timeout
+        while self.audio_queues[lecture_id].qsize() or self.processing_counts[lecture_id]:
+            task = self.processing_tasks.get(lecture_id)
+            if task is None or task.done():
+                break
+            if time.monotonic() > deadline:
+                logger.warning("wait_for_lecture_idle timed out for %s", lecture_id)
+                break
+            await asyncio.sleep(0.1)
 
     async def process_audio_chunk(
         self, lecture_id: str, audio_file: UploadFile, websocket: WebSocket, user_id: str
@@ -103,118 +130,135 @@ class AudioProcessor:
         try:
             while True:
                 chunk_data = await self.audio_queues[lecture_id].get()
-                file_path: Path = chunk_data["file_path"]
-                websocket: WebSocket = chunk_data["websocket"]
-
-                # Transcribe
-                await websocket.send_json({"type": "job_status", "stage": "transcribe", "ratio": 0.2, "retries": 0})
+                self.processing_counts[lecture_id] += 1
                 try:
-                    transcription_result = transcribe_local(str(file_path))
-                    transcription_text = transcription_result.get("text", "").strip()
-                except Exception as trans_error:
-                    logger.error("Transcription error: %s", trans_error, exc_info=True)
-                    continue
-
-                if not transcription_text:
-                    logger.warning("No speech detected in chunk")
-                    continue
-
-                transcription_data = {
-                    "text": transcription_text,
-                    "timestamp": chunk_data["timestamp"],
-                    "language": transcription_result.get("language"),
-                    "duration": transcription_result.get("duration"),
-                }
-                self.transcription_buffers[lecture_id].append(transcription_data)
-
-                # RAG-enhanced per-chunk notes
-                await websocket.send_json({"type": "job_status", "stage": "retrieve", "ratio": 0.45, "retries": 0})
-                retrieved_chunks = await retrieve(
-                    transcription_text,
-                    user_id=user_id,
-                    lecture_ids=[lecture_id],
-                    limit=5,
-                )
-                source_rows, source_context = citation_sources(retrieved_chunks)
-                rag_context = source_context.splitlines()
-                enhanced_notes = await generate_raw_notes(
-                    transcription_text=transcription_text,
-                    context_chunks=rag_context,
-                    lecture_id=lecture_id,
-                    previous_notes=[],
-                )
-                await websocket.send_json({"type": "job_status", "stage": "enhanced_notes", "ratio": 0.75, "retries": 0})
-
-                chunk_index = len(self.transcription_buffers[lecture_id]) - 1
-                importance_result = score_importance(
-                    {
-                        "text": transcription_text,
-                        "segments": transcription_result.get("segments", []),
-                    }
-                )
-                importance = importance_result.get("importance", 0.5)
-                duration_ms = int((transcription_result.get("duration") or settings.CHUNK_DURATION) * 1000)
-                start_ms = chunk_index * duration_ms
-                end_ms = start_ms + duration_ms
-                segment_id = None
-
-                try:
-                    segment_id = await save_transcription(
-                        lecture_id=lecture_id,
-                        chunk_index=chunk_index,
-                        text=transcription_text,
-                        enhanced_notes=enhanced_notes,
-                        timestamp=chunk_data["timestamp"],
-                        importance=importance,
-                        start_ms=start_ms,
-                        end_ms=end_ms,
-                        seq=chunk_index,
-                        citation_ids=[source["id"] for source in source_rows],
+                    await self._process_chunk(lecture_id, user_id, chunk_data)
+                except Exception as chunk_error:
+                    # A single bad chunk must never kill the task or freeze Stop.
+                    logger.error(
+                        "Error processing a chunk for %s (skipping it): %s",
+                        lecture_id, chunk_error, exc_info=True,
                     )
-                except Exception as db_error:
-                    logger.error("Failed to save transcription: %s", db_error)
-
-                await websocket.send_json(
-                    {
-                        "type": "transcription",
-                        "content": transcription_text,
-                        "enhanced_notes": enhanced_notes,
-                        "timestamp": chunk_data["timestamp"],
-                        "segment_id": segment_id,
-                        "start_ms": start_ms,
-                        "end_ms": end_ms,
-                        "chunk_number": len(self.transcription_buffers[lecture_id]),
-                    }
-                )
-                await websocket.send_json({"type": "job_status", "stage": "complete", "ratio": 1.0, "retries": 0})
-
-                # Periodic structured-note synthesis
-                buffer_size = len(self.transcription_buffers[lecture_id])
-                current_time = time.time()
-                last_synthesis = self.last_synthesis_time[lecture_id]
-                should_synthesize = False
-                if buffer_size >= 3:
-                    time_since_last = current_time - last_synthesis
-                    if time_since_last >= 60 or last_synthesis == 0:
-                        should_synthesize = True
-                    else:
-                        recent = [t["text"] for t in self.transcription_buffers[lecture_id][-3:]]
-                        if await detect_topic_shift(recent[-1], recent[:-1]):
-                            should_synthesize = True
-                if should_synthesize:
-                    await self.synthesize_notes(lecture_id, websocket)
-
-                # Cleanup
-                try:
-                    file_path.unlink()
-                except Exception:
-                    pass
-
+                finally:
+                    # Always decrement so wait_for_lecture_idle can never hang.
+                    self.processing_counts[lecture_id] = max(0, self.processing_counts[lecture_id] - 1)
         except asyncio.CancelledError:
+            self.processing_counts[lecture_id] = 0
             logger.info("Task cancelled for %s", lecture_id)
             raise
-        except Exception as e:
-            logger.error("Fatal error in processing task: %s", e, exc_info=True)
+
+    async def _process_chunk(self, lecture_id: str, user_id: str, chunk_data: dict) -> None:
+        """Transcribe one queued chunk, generate enhanced notes, persist, stream."""
+        file_path: Path = chunk_data["file_path"]
+        websocket: WebSocket = chunk_data["websocket"]
+
+        # Transcribe
+        await self._send_event(websocket, {"type": "job_status", "stage": "transcribe", "ratio": 0.2, "retries": 0})
+        try:
+            transcription_result = transcribe_local(str(file_path))
+            transcription_text = transcription_result.get("text", "").strip()
+        except Exception as trans_error:
+            logger.error("Transcription error: %s", trans_error, exc_info=True)
+            return
+
+        if not transcription_text:
+            logger.warning("No speech detected in chunk")
+            return
+
+        transcription_data = {
+            "text": transcription_text,
+            "timestamp": chunk_data["timestamp"],
+            "language": transcription_result.get("language"),
+            "duration": transcription_result.get("duration"),
+        }
+        self.transcription_buffers[lecture_id].append(transcription_data)
+
+        # RAG-enhanced per-chunk notes
+        await self._send_event(websocket, {"type": "job_status", "stage": "retrieve", "ratio": 0.45, "retries": 0})
+        retrieved_chunks = await retrieve(
+            transcription_text,
+            user_id=user_id,
+            lecture_ids=[lecture_id],
+            limit=5,
+        )
+        source_rows, source_context = citation_sources(retrieved_chunks)
+        rag_context = source_context.splitlines()
+        enhanced_notes = await generate_raw_notes(
+            transcription_text=transcription_text,
+            context_chunks=rag_context,
+            lecture_id=lecture_id,
+            previous_notes=[],
+        )
+        await self._send_event(websocket, {"type": "job_status", "stage": "enhanced_notes", "ratio": 0.75, "retries": 0})
+
+        chunk_index = len(self.transcription_buffers[lecture_id]) - 1
+        # Importance scoring is non-essential; never let it drop a transcription.
+        try:
+            importance = score_importance(
+                {"text": transcription_text, "segments": transcription_result.get("segments", [])}
+            ).get("importance", 0.5)
+        except Exception as score_error:
+            logger.warning("Importance scoring failed: %s", score_error)
+            importance = 0.5
+        duration_ms = int((transcription_result.get("duration") or settings.CHUNK_DURATION) * 1000)
+        start_ms = chunk_index * duration_ms
+        end_ms = start_ms + duration_ms
+        segment_id = None
+
+        try:
+            segment_id = await save_transcription(
+                lecture_id=lecture_id,
+                chunk_index=chunk_index,
+                text=transcription_text,
+                enhanced_notes=enhanced_notes,
+                timestamp=chunk_data["timestamp"],
+                importance=importance,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                seq=chunk_index,
+                citation_ids=[source["id"] for source in source_rows],
+            )
+        except Exception as db_error:
+            logger.error("Failed to save transcription: %s", db_error)
+
+        await self._send_event(
+            websocket,
+            {
+                "type": "transcription",
+                "content": transcription_text,
+                "enhanced_notes": enhanced_notes,
+                "timestamp": chunk_data["timestamp"],
+                "segment_id": segment_id,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "chunk_number": len(self.transcription_buffers[lecture_id]),
+            }
+        )
+        # Periodic structured-note synthesis
+        buffer_size = len(self.transcription_buffers[lecture_id])
+        current_time = time.time()
+        last_synthesis = self.last_synthesis_time[lecture_id]
+        should_synthesize = False
+        if buffer_size >= 3:
+            time_since_last = current_time - last_synthesis
+            if time_since_last >= 60 or last_synthesis == 0:
+                should_synthesize = True
+            else:
+                recent = [t["text"] for t in self.transcription_buffers[lecture_id][-3:]]
+                if await detect_topic_shift(recent[-1], recent[:-1]):
+                    should_synthesize = True
+        if should_synthesize:
+            await self.synthesize_notes(lecture_id, websocket)
+
+        # Cleanup
+        try:
+            file_path.unlink()
+        except Exception:
+            pass
+
+        # Always the last event for the chunk, so the status bar settles instead
+        # of hanging on an intermediate stage like "Structuring notes".
+        await self._send_event(websocket, {"type": "job_status", "stage": "complete", "ratio": 1.0, "retries": 0})
 
     async def synthesize_notes(self, lecture_id: str, websocket: WebSocket) -> None:
         """Synthesise structured notes from accumulated transcriptions."""
@@ -238,10 +282,11 @@ class AudioProcessor:
                 else None
             )
 
-            await websocket.send_json(
+            await self._send_event(
+                websocket,
                 {"type": "synthesis_started", "message": "Generating structured notes..."}
             )
-            await websocket.send_json({"type": "job_status", "stage": "periodic_synthesis", "ratio": 0.8, "retries": 0})
+            await self._send_event(websocket, {"type": "job_status", "stage": "periodic_synthesis", "ratio": 0.8, "retries": 0})
 
             synthesis_result = await synthesize_structured_notes(
                 transcriptions=transcriptions,
@@ -268,7 +313,8 @@ class AudioProcessor:
                 except Exception as db_error:
                     logger.error("Failed to save structured notes: %s", db_error)
 
-                await websocket.send_json(
+                await self._send_event(
+                    websocket,
                     {
                         "type": "structured_notes",
                         "content": structured_notes,
@@ -284,7 +330,7 @@ class AudioProcessor:
 
         except Exception as e:
             logger.error("Error synthesizing notes: %s", e, exc_info=True)
-            await websocket.send_json({"type": "synthesis_error", "error": str(e)})
+            await self._send_event(websocket, {"type": "synthesis_error", "error": str(e)})
 
     async def final_synthesis(self, lecture_id: str, websocket: WebSocket) -> None:
         """Generate final comprehensive notes from all accumulated structured notes."""
@@ -294,9 +340,11 @@ class AudioProcessor:
                 logger.warning("No structured notes to synthesize for %s", lecture_id)
                 return
 
-            await websocket.send_json(
+            await self._send_event(
+                websocket,
                 {"type": "final_synthesis_started", "message": "Creating comprehensive final notes..."}
             )
+            await self._send_event(websocket, {"type": "job_status", "stage": "final_synthesis", "ratio": 0.6, "retries": 0})
 
             all_transcriptions = " ".join(
                 t["text"] for t in self.transcription_buffers[lecture_id]
@@ -336,7 +384,8 @@ class AudioProcessor:
                 except Exception as db_error:
                     logger.error("Failed to save final notes: %s", db_error)
 
-                await websocket.send_json(
+                await self._send_event(
+                    websocket,
                     {
                         "type": "final_notes",
                         "title": final_result["title"],
@@ -351,9 +400,11 @@ class AudioProcessor:
             else:
                 logger.warning("Final synthesis returned no results")
 
+            await self._send_event(websocket, {"type": "job_status", "stage": "complete", "ratio": 1.0, "retries": 0})
+
         except Exception as e:
             logger.error("Error in final synthesis: %s", e, exc_info=True)
-            await websocket.send_json({"type": "final_synthesis_error", "error": str(e)})
+            await self._send_event(websocket, {"type": "final_synthesis_error", "error": str(e)})
 
 
 processor = AudioProcessor()

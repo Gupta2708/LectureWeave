@@ -9,9 +9,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python deps first for better layer caching.
+# Install Python deps first for better layer caching. Sentence Transformers needs
+# PyTorch, but the default Linux resolver can choose CUDA wheels even though this
+# image is CPU-only. Preinstalling the CPU wheel avoids multi-gigabyte NVIDIA
+# downloads and makes the image usable on ordinary Docker Desktop hosts.
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --retries 5 --timeout 120 \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.5.1+cpu \
+    && pip install --no-cache-dir --retries 5 --timeout 120 -r requirements.txt
 
 # Copy the application.
 COPY . .

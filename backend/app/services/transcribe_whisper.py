@@ -41,19 +41,24 @@ def transcribe_local(audio_path: str, beam_size: int = 5) -> Dict[str, Any]:
     """
     model = _load_model()
     
-    # Optimized transcription settings for better quality
+    # Transcription tuned to reduce hallucination on quiet/unclear audio.
+    # - No biasing `initial_prompt`: a topical prompt makes Whisper emit
+    #   plausible-sounding but invented phrases when it hears little.
+    # - `condition_on_previous_text=False`: stops one bad segment's text from
+    #   seeding hallucinations in the next.
+    # - VAD + a firmer `no_speech_threshold` drop near-silent chunks instead of
+    #   inventing "Thank you." / "We're stronger, guys." style artefacts.
     segments, info = model.transcribe(
-        audio_path, 
-        beam_size=5,                      # Good balance of speed/quality
-        language="en",                    # Force English for better accuracy
-        condition_on_previous_text=True,  # Use context from previous segments
-        temperature=0.0,                  # Deterministic output
-        compression_ratio_threshold=2.4,  # Filter out low-quality segments
-        log_prob_threshold=-1.0,          # Filter based on probability
-        no_speech_threshold=0.6,          # Better silence detection
-        vad_filter=True,                  # Voice activity detection
-        vad_parameters=dict(min_silence_duration_ms=500),  # Better silence handling
-        initial_prompt="This is an educational lecture about artificial intelligence, machine learning, deep learning, neural networks, and computer science. The speaker discusses technical concepts, algorithms, and methodologies."
+        audio_path,
+        beam_size=5,                       # Good balance of speed/quality
+        language="en",                     # Force English for better accuracy
+        condition_on_previous_text=False,  # Avoid cross-segment hallucination
+        temperature=0.0,                   # Deterministic output
+        compression_ratio_threshold=2.4,   # Filter out low-quality segments
+        log_prob_threshold=-1.0,           # Filter based on probability
+        no_speech_threshold=0.6,           # Silence detection
+        vad_filter=True,                   # Voice activity detection
+        vad_parameters=dict(min_silence_duration_ms=500),
     )
 
     transcript_text = ""
