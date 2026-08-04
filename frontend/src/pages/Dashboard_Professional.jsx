@@ -97,7 +97,7 @@ const Dashboard_Professional = () => {
                 Welcome back, {user?.username}! 👋
               </h1>
               <p className="text-gray-600 mt-1">
-                Here's what's happening with your lectures today
+                Here&apos;s what&apos;s happening with your lectures today
               </p>
             </div>
              {/* <p className='text-xl text-black'>Please use personal internet for this project</p> */}

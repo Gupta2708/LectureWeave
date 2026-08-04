@@ -225,7 +225,7 @@ export default function FinalNotesDocument({ finalNotes, lectureName }) {
       </div>
 
       {/* Print Styles */}
-      <style jsx global>{`
+      <style>{`
         @media print {
           body {
             margin: 0;

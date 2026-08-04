@@ -182,7 +182,7 @@ const Signup = () => {
 
         {/* Features */}
         <div className="mt-6 bg-white rounded-lg shadow p-4">
-          <h3 className="font-semibold text-gray-900 mb-3">What you'll get:</h3>
+          <h3 className="font-semibold text-gray-900 mb-3">What you&apos;ll get:</h3>
           <ul className="space-y-2 text-sm text-gray-600">
             <li className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-green-500" />

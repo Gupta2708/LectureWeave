@@ -1,0 +1,44 @@
+# Local development stack.
+#
+# Brings up MongoDB and the LectureWeave backend. The frontend runs separately
+# with `npm run dev` because it needs the Vite hot-reload workflow.
+#
+# Copy backend/.env.example to backend/.env and set GROQ_API_KEY and
+# JWT_SECRET_KEY before starting.
+
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    environment:
+      MONGODB_URL: mongodb://mongodb:27017
+      MONGODB_DATABASE: lectureweave
+      HOST: 0.0.0.0
+      PORT: 8000
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/storage:/app/storage
+
+volumes:
+  mongo-data:
