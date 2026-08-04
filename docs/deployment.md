@@ -1,53 +1,40 @@
 # Deployment
 
-The project currently deploys on **Railway** using the NIXPACKS builder. The
-backend and frontend are deployed as separate services.
+LectureWeave deploys the frontend and FastAPI backend as separate Railway
+services. The backend command is already configured in `backend/railway.toml`,
+`backend/Procfile`, and `backend/nixpacks.toml`:
 
-## Backend service
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
 
-Configuration files (in `backend/`):
+Keep the backend at one replica. Live recording queues and WebSocket sessions
+are process-local; scaling needs a shared queue and connection/session layer.
 
-- `railway.toml` — `startCommand = "python optimized_main.py"`
-- `Procfile` — `web: python optimized_main.py`
-- `nixpacks.toml` — installs `python311`, `ffmpeg`, `libsndfile`, creates a venv,
-  and installs `requirements-railway.txt`
-- `runtime.txt` — `python-3.11.9`
+## Backend configuration
 
-The root `railway.json` selects the NIXPACKS builder and sets
-`numReplicas = 1`, restart-on-failure.
+Set these variables in Railway, never in source control:
 
-Required environment variables (set in the platform, not committed):
-
-- `MONGODB_URL` (a MongoDB Atlas `mongodb+srv://...` string works from any host)
+- `APP_ENV=production`
+- `MONGODB_URL` and, optionally, `MONGODB_DATABASE`
+- `JWT_SECRET_KEY` (a long random value)
 - `GROQ_API_KEY`
-- `JWT_SECRET_KEY`
-- `PORT` is provided by the platform; the app reads it.
+- `CORS_ALLOWED_ORIGINS=https://<frontend-host>`
 
-For a production MongoDB Atlas cluster, replace the development
-`0.0.0.0/0` network rule with the specific egress IPs of your deployment.
+`PORT` is supplied by Railway. Optional tuning variables include
+`VECTOR_INDEX_NAME`, retrieval limits and weights, `PROCESSING_MAX_RETRIES`,
+and `CHAT_MAX_*`; see [configuration.md](configuration.md).
 
-## Frontend service
+Railway installs `requirements-railway.txt`. It includes ffmpeg/system audio
+packages through Nixpacks; PDF export additionally uses WeasyPrint's platform
+libraries, so validate exports in the deployed image after dependency changes.
 
-`frontend/railway.toml`:
+## Frontend configuration
 
-- Build: `npm install && npm run build`
-- Serve: `npm run preview -- --host 0.0.0.0 --port $PORT`
+The frontend builds with Vite. Set these build-time variables, then rebuild:
 
-Set the frontend environment variables to point at the deployed backend:
+- `VITE_API_BASE_URL=https://<backend-host>`
+- `VITE_WS_BASE_URL=wss://<backend-host>`
 
-- `VITE_API_BASE_URL=https://<your-backend-host>`
-- `VITE_WS_BASE_URL=wss://<your-backend-host>`
-
-These are build-time variables for Vite, so a rebuild is required after changing
-them.
-
-## Notes and planned changes
-
-- The active entry point is `optimized_main.py`. When the backend is
-  modularised into `app/main.py`, the start command becomes
-  `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, and all deployment files
-  above must be updated together. See [migration-plan.md](migration-plan.md).
-- CORS must allow only the deployed frontend origin(s) in production; this is
-  currently set in `optimized_main.py` and is planned to move to a
-  `CORS_ALLOWED_ORIGINS` environment variable.
-- Do not place real Atlas credentials in any committed file, including this one.
+Restrict Atlas network access to Railway's documented egress range where
+possible. Do not use an unrestricted production database allow-list.

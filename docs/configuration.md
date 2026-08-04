@@ -1,58 +1,37 @@
 # Configuration
 
-All configuration is supplied through environment variables. Copy the tracked
-templates to real files and fill in values — never commit a real `.env`.
+Copy [`backend/.env.example`](../backend/.env.example) to `backend/.env` for
+local development. Production values belong in the deployment platform.
 
-- Backend template: [`backend/.env.example`](../backend/.env.example)
-- Frontend template: [`frontend/.env.example`](../frontend/.env.example)
+## Required production variables
 
-The backend `.env` must live in `backend/` (it is loaded relative to the backend
-working directory), not at the repository root.
+| Variable | Purpose |
+| --- | --- |
+| `APP_ENV=production` | Enables startup validation of secrets and CORS. |
+| `MONGODB_URL` | MongoDB connection string. |
+| `JWT_SECRET_KEY` | Access-token signing secret. |
+| `GROQ_API_KEY` | Note-generation model access. |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated explicit browser origins. |
 
-## Backend variables
+`MONGODB_DATABASE` defaults to `lectureweave`; set it to isolate environments.
+`PORT` defaults to `8000` and is normally supplied by the host.
 
-| Variable | Required | Dev example | Purpose | Secret |
-| --- | :--: | --- | --- | :--: |
-| `PORT` | no | `8000` | Port the API listens on (code fallback is `8001`) | no |
-| `MONGODB_URL` | yes | `mongodb://localhost:27017` | MongoDB connection string (local or Atlas `mongodb+srv://...`) | yes |
-| `GROQ_API_KEY` | yes | `gsk_...` | Groq LLM key for note generation | yes |
-| `JWT_SECRET_KEY` | yes | long random string | Signing key for JWT access tokens | yes |
-| `LLM_MODEL` | no | `llama-3.1-8b-instant` | Groq model id | no |
-| `WHISPER_MODEL_SIZE` | no | `small` | Faster Whisper model (`tiny`/`base`/`small`/`medium`/`large`) | no |
-| `WHISPER_DEVICE` | no | `cpu` | Whisper device | no |
-| `WHISPER_COMPUTE_TYPE` | no | `int8` | Whisper compute type | no |
-| `EMBEDDING_MODEL` | no | `all-MiniLM-L6-v2` | Sentence-transformers model (384-dim) | no |
+## Processing and retrieval tuning
 
-Generate a strong JWT secret:
+`DOCUMENT_CHUNK_SIZE`, `DOCUMENT_CHUNK_OVERLAP`, and
+`DOCUMENT_MIN_CHUNK_SIZE` control source chunking. Hybrid retrieval uses
+`VECTOR_INDEX_NAME`, `RETRIEVAL_VECTOR_LIMIT`, `RETRIEVAL_KEYWORD_LIMIT`,
+`RETRIEVAL_FINAL_LIMIT`, and vector/keyword weights. See
+[retrieval.md](retrieval.md) before changing them.
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+`PROCESSING_MAX_RETRIES`, `CHAT_MAX_HISTORY_MESSAGES`,
+`CHAT_MAX_CONTEXT_CHUNKS`, `FLASHCARD_DEFAULT_COUNT`, `QUIZ_DEFAULT_COUNT`,
+and topic settings bound work performed per request.
 
 ## Frontend variables
 
-Read through `frontend/src/config/environment.js`. Trailing slashes are stripped
-safely; missing values fall back to localhost with a development warning.
+Set `VITE_API_BASE_URL` and `VITE_WS_BASE_URL` to the deployed backend URLs.
+They are embedded during Vite's build, so changing either requires a rebuild.
 
-| Variable | Required | Dev example | Purpose |
-| --- | :--: | --- | --- |
-| `VITE_APP_NAME` | no | `LectureWeave` | Display name |
-| `VITE_API_BASE_URL` | recommended | `http://localhost:8000` | Backend HTTP base URL |
-| `VITE_WS_BASE_URL` | recommended | `ws://localhost:8000` | Backend WebSocket base URL |
-
-## Values that are not yet environment-driven
-
-These are known and tracked in [migration-plan.md](migration-plan.md):
-
-- **CORS origins** are currently configured inside `optimized_main.py` rather
-  than via a `CORS_ALLOWED_ORIGINS` variable.
-- **Token expiry** (`ACCESS_TOKEN_EXPIRE_DAYS = 30`) is a constant in
-  `backend/app/services/auth_service.py`.
-- **Password minimum length** (6) is checked in `backend/app/api/auth.py`.
-- **Database name** is not yet parameterised via `MONGODB_DATABASE`.
-
-## Common configuration mistakes
-
-- `.env` placed at the repo root instead of `backend/`.
-- Extra spaces around a value, or a Groq key not prefixed with `gsk_`.
-- `python-dotenv` not installed (the backend loads `.env` via `load_dotenv()`).
+Never commit `.env` files or production credentials. Generate a JWT secret with
+`python -c "import secrets; print(secrets.token_urlsafe(48))"`.
