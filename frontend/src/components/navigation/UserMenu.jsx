@@ -4,11 +4,7 @@ import { LogOut, ChevronDown } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import Dropdown, { DropdownItem } from '../ui/Dropdown'
 import { cn } from '../../lib/utils'
-
-export function initialsOf(user) {
-  const name = user?.username || user?.email || 'U'
-  return name.trim().slice(0, 1).toUpperCase()
-}
+import { initialsOf } from '../../lib/user'
 
 export default function UserMenu({ compact = false }) {
   const { user, logout } = useAuth()
