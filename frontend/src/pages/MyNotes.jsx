@@ -47,7 +47,8 @@ const MyNotes = () => {
   };
 
   const handleNewLecture = () => {
-    navigate('/');
+    // '/' is now the public landing page; the dashboard lives at '/app'.
+    navigate('/app');
   };
 
   const viewNote = (note) => {

@@ -50,7 +50,7 @@ const Signup = () => {
     const result = await register(formData.email, formData.password, formData.username);
     
     if (result.success) {
-      navigate('/');
+      navigate('/app');
     } else {
       setError(result.error);
     }
