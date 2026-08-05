@@ -5,9 +5,6 @@ export function cn(...inputs){
   return twMerge(clsx(inputs))
 }
 
-console.log(`hello`);
-
-
 export function formatDuration(seconds) {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
