@@ -174,10 +174,25 @@ No new runtime dependencies. All required libraries already present:
 ## Delivery status
 
 - [x] UI-0 — audit + this map
-- [ ] UI-1 — tokens, primitives, motion
-- [ ] UI-2 — routing + layouts + navigation
-- [ ] UI-3 — landing + auth  → **review checkpoint**
+- [x] UI-1 — tokens, primitives (~18), motion system
+- [x] UI-2 — routing + layouts + navigation
+- [x] UI-3 — landing + auth  → **review checkpoint reached**
 - [ ] UI-4 — dashboard, subjects, setup, notes list
 - [ ] UI-5 — live lecture (isolated, high-risk)
 - [ ] UI-6 — notes viewer, chat, flashcards, quizzes
 - [ ] UI-7 — polish, a11y, bundle, tests
+
+### Checkpoint results (post UI-3)
+- `npm run lint` clean · `npm run test` 4/4 · `npm run build` passes.
+- Bundle: main `index.js` **912 kB (gzip 281 kB)** — up from the 765 kB
+  baseline because Framer Motion is now used across the shell. Landing is
+  code-split (`LandingPage` 22 kB / gzip 7 kB). Breaking up the main chunk
+  (manualChunks + lazy feature routes) is scheduled for UI-7.
+- Verified on the production preview (zero console errors): `/` animated
+  landing, `/login` + `/signup` in AuthLayout, `/app` → redirects to login when
+  signed out, `/dashboard` → `/app`.
+- Font: Manrope loaded via Google Fonts `<link>` in index.html with a full
+  system-font fallback (deviation from the "self-hosted" plan note — chosen for
+  reliability on Vercel/CF Pages; degrades gracefully offline).
+- Live-lecture route untouched (FocusLayout renders it as a bare, un-keyed
+  child); recorder/WebSocket lifecycle unchanged by construction.
