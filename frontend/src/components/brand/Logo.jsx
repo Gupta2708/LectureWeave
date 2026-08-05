@@ -1,53 +1,33 @@
-import React from 'react'
+import React, { useMemo } from 'react'
+import rawLogo from '../../assets/logo.svg?raw'
 
 /**
- * LectureWeave mark: two woven strands (audio → structure) forming a "W"-like
- * knot, expressing "weaving a lecture into notes". Inherits currentColor by
- * default; pass `gradient` for the brand two-tone treatment.
+ * The LectureWeave mark (woven strands). Rendered inline from the source SVG
+ * so the navy body can follow `currentColor` (adapts to light/dark surfaces)
+ * while the teal accent is preserved. Set the colour via a `text-*` class or
+ * the `color` prop on the wrapper.
  */
-export default function Logo({ size = 28, gradient = true, className, title = 'LectureWeave' }) {
-  const gid = React.useId()
+function prepare(raw) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
-      fill="none"
+    raw
+      // Navy body → currentColor so it adapts to the surrounding surface.
+      .replace(/#231E4F/gi, 'currentColor')
+      // Drop the intrinsic width/height; the wrapper controls the size.
+      .replace(/\s(width|height)="\d+"/g, '')
+      // Make the svg fill the wrapper box.
+      .replace(/<svg /, '<svg width="100%" height="100%" style="display:block" ')
+  )
+}
+
+export default function Logo({ size = 28, color, className, title = 'LectureWeave' }) {
+  const html = useMemo(() => prepare(rawLogo), [])
+  return (
+    <span
       role="img"
       aria-label={title}
       className={className}
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      {gradient && (
-        <defs>
-          <linearGradient id={gid} x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
-            <stop stopColor="var(--brand-500)" />
-            <stop offset="1" stopColor="var(--accent-violet)" />
-          </linearGradient>
-        </defs>
-      )}
-      <rect
-        x="1.5"
-        y="1.5"
-        width="29"
-        height="29"
-        rx="8"
-        fill={gradient ? `url(#${gid})` : 'currentColor'}
-        opacity={gradient ? 0.12 : 0.1}
-      />
-      <path
-        d="M7 9c2.6 0 3.4 5.5 5.2 5.5S15 9 16 9s1 5.5 2.8 5.5S22.4 9 25 9"
-        stroke={gradient ? `url(#${gid})` : 'currentColor'}
-        strokeWidth="2.4"
-        strokeLinecap="round"
-      />
-      <path
-        d="M7 18.5c2.6 0 3.4 4.5 5.2 4.5S15 18.5 16 18.5s1 4.5 2.8 4.5 3.6-4.5 6.2-4.5"
-        stroke={gradient ? `url(#${gid})` : 'currentColor'}
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        opacity="0.55"
-      />
-    </svg>
+      style={{ width: size, height: size, color, display: 'inline-block', lineHeight: 0 }}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   )
 }
