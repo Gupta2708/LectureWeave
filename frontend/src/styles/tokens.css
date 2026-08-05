@@ -1,0 +1,99 @@
+/*
+ * LectureWeave design tokens.
+ *
+ * Single source of truth for colour, radius, shadow, spacing and typography.
+ * Components reference these via the Tailwind mappings in tailwind.config.js
+ * (e.g. `bg-brand-600`, `text-ink`, `border-line`) — never hard-coded hex.
+ *
+ * The legacy `primary` (sky) / `secondary` (slate) Tailwind scales are kept
+ * untouched so pages not yet migrated keep rendering as before; the redesign
+ * uses the new `brand` / `surface` / `ink` token layer defined here.
+ */
+
+:root {
+  /* App surfaces (light) */
+  --background: #f7f8fc;
+  --surface: #ffffff;
+  --surface-subtle: #f1f3f9;
+  --surface-muted: #e9edf6;
+
+  /* Text / ink */
+  --ink: #111827;
+  --ink-soft: #64748b;
+  --ink-faint: #94a3b8;
+
+  /* Borders */
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+
+  /* Brand (violet) */
+  --brand-50: #ececff;
+  --brand-100: #e0e0ff;
+  --brand-200: #c7c7fb;
+  --brand-300: #a6a6f5;
+  --brand-400: #8080ee;
+  --brand-500: #6366e6;
+  --brand-600: #5b5ce2;
+  --brand-700: #4344c8;
+  --brand-800: #3536a0;
+  --brand-900: #2b2c7c;
+  --brand-soft: #ececff;
+
+  /* Accents */
+  --accent-cyan: #22d3ee;
+  --accent-violet: #8b5cf6;
+
+  /* Semantic */
+  --success: #16a34a;
+  --success-soft: #dcfce7;
+  --warning: #f59e0b;
+  --warning-soft: #fef3c7;
+  --danger: #ef4444;
+  --danger-soft: #fee2e2;
+  --info: #0ea5e9;
+  --info-soft: #e0f2fe;
+
+  /* Status system (shared across recording / processing / documents) */
+  --status-ready: #64748b;
+  --status-recording: #ef4444;
+  --status-uploading: #0ea5e9;
+  --status-transcribing: #6366e6;
+  --status-retrieving: #8b5cf6;
+  --status-generating: #f59e0b;
+  --status-complete: #16a34a;
+  --status-failed: #ef4444;
+  --status-retrying: #f59e0b;
+  --status-disconnected: #94a3b8;
+
+  /* Marketing (dark) foundation */
+  --marketing-background: #090b16;
+  --marketing-surface: #111528;
+  --marketing-surface-2: #171c34;
+  --marketing-text: #f8fafc;
+  --marketing-text-soft: #a3adc9;
+  --marketing-line: #22284a;
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-pill: 999px;
+
+  /* Shadows (controlled, not heavy) */
+  --shadow-xs: 0 1px 2px 0 rgb(15 23 42 / 0.04);
+  --shadow-sm: 0 1px 3px 0 rgb(15 23 42 / 0.06), 0 1px 2px -1px rgb(15 23 42 / 0.06);
+  --shadow-md: 0 4px 12px -2px rgb(15 23 42 / 0.08), 0 2px 6px -2px rgb(15 23 42 / 0.06);
+  --shadow-lg: 0 12px 32px -8px rgb(15 23 42 / 0.14), 0 4px 12px -4px rgb(15 23 42 / 0.08);
+  --shadow-brand: 0 10px 30px -8px rgb(91 92 226 / 0.35);
+
+  /* Focus ring */
+  --ring: 0 0 0 3px rgb(91 92 226 / 0.35);
+
+  /* Typography */
+  --font-sans: "Manrope", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}

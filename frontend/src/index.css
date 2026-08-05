@@ -1,3 +1,6 @@
+@import './styles/tokens.css';
+@import './styles/animations.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -6,8 +9,19 @@
   * {
     @apply border-secondary-200;
   }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
   body {
     @apply bg-secondary-50 text-secondary-900;
+    font-family: var(--font-sans);
+  }
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+    border-radius: 4px;
   }
 }
 

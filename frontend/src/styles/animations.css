@@ -1,0 +1,64 @@
+/*
+ * Shared keyframe animations for LectureWeave.
+ * Framer Motion handles most component motion; these are the ambient/CSS-only
+ * effects (skeleton shimmer, decorative glows, waveform) that don't need JS.
+ *
+ * Everything decorative is disabled under `prefers-reduced-motion: reduce`.
+ */
+
+@keyframes lw-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes lw-pulse-ring {
+  0% { transform: scale(0.95); opacity: 0.7; }
+  70% { transform: scale(1.25); opacity: 0; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+@keyframes lw-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes lw-gradient-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(2%, -2%, 0) scale(1.05); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes lw-waveform {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+
+/* Skeleton shimmer surface */
+.lw-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-subtle) 25%,
+    var(--surface-muted) 37%,
+    var(--surface-subtle) 63%
+  );
+  background-size: 200% 100%;
+  animation: lw-shimmer 1.4s ease-in-out infinite;
+}
+
+/* Waveform bars (used by the recording UI / landing product visual) */
+.lw-wavebar {
+  transform-origin: center;
+  animation: lw-waveform 1s ease-in-out infinite;
+}
+
+.lw-float { animation: lw-float 6s ease-in-out infinite; }
+.lw-gradient-drift { animation: lw-gradient-drift 18s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lw-skeleton,
+  .lw-wavebar,
+  .lw-float,
+  .lw-gradient-drift {
+    animation: none !important;
+  }
+}
